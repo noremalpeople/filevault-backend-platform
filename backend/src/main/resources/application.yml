@@ -29,6 +29,18 @@ server:
         http-only: true
         same-site: strict
 filevault:
+  stats-cache-ttl: "${FILEVAULT_STATS_CACHE_TTL:PT30S}"
+  stats-cache-capacity: "${FILEVAULT_STATS_CACHE_CAPACITY:1024}"
+  maintenance:
+    enabled: "${FILEVAULT_MAINTENANCE_ENABLED:true}"
+    core: "${FILEVAULT_MAINTENANCE_CORE:1}"
+    max: "${FILEVAULT_MAINTENANCE_MAX:2}"
+    queue: "${FILEVAULT_MAINTENANCE_QUEUE:4}"
+    period-seconds: "${FILEVAULT_MAINTENANCE_PERIOD_SECONDS:3600}"
+    poll-seconds: "${FILEVAULT_MAINTENANCE_POLL_SECONDS:30}"
+    lease-seconds: "${FILEVAULT_MAINTENANCE_LEASE_SECONDS:900}"
+    retry-seconds: "${FILEVAULT_MAINTENANCE_RETRY_SECONDS:60}"
+  upload-cleanup-enabled: "${FILEVAULT_UPLOAD_CLEANUP_ENABLED:true}"
   web-root: "${FILEVAULT_WEB_ROOT:classpath:/static/}"
   storage-root: "${FILEVAULT_STORAGE_ROOT:../.local/storage}"
   max-upload-bytes: "${FILEVAULT_MAX_UPLOAD_BYTES:209715200}"

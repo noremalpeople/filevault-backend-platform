@@ -16,14 +16,33 @@ public interface FileMapper {
             FROM user_files f JOIN file_objects o ON o.id = f.object_id AND o.owner_id = f.owner_id
             WHERE f.owner_id = #{owner} AND f.deleted_at IS NULL
             """;
+    String SEARCH = """
+            SELECT f.id, f.display_name AS displayName, o.storage_key AS storageKey,
+                   o.sha256, o.size_bytes AS sizeBytes, f.media_type AS mediaType, f.created_at AS createdAt
+            FROM user_files f FORCE INDEX (ix_files_owner_name)
+            STRAIGHT_JOIN file_objects o ON o.id = f.object_id AND o.owner_id = f.owner_id
+            WHERE f.owner_id = #{owner} AND f.deleted_at IS NULL AND f.display_name LIKE #{pattern} ESCAPE '!'
+            ORDER BY f.created_at DESC, f.id DESC LIMIT #{limit} OFFSET #{offset}
+            """;
 
     record StoredFile(String id, String displayName, String storageKey, String sha256,
                       long sizeBytes, String mediaType, LocalDateTime createdAt) { }
 
     record ReusableObject(String id, String storageKey) { }
+    record Statistics(long files, long logicalBytes) { }
 
     @Select(METADATA + " ORDER BY f.created_at DESC, f.id DESC LIMIT #{limit} OFFSET #{offset}")
     List<StoredFile> list(long owner, int limit, long offset);
+
+    @Select(SEARCH)
+    List<StoredFile> search(long owner, String pattern, int limit, long offset);
+
+    @Select("""
+            SELECT COUNT(*) AS files, COALESCE(SUM(o.size_bytes), 0) AS logicalBytes
+            FROM user_files f JOIN file_objects o ON o.id = f.object_id AND o.owner_id = f.owner_id
+            WHERE f.owner_id = #{owner} AND f.deleted_at IS NULL
+            """)
+    Statistics statistics(long owner);
 
     @Select(METADATA + " AND f.id = #{id}")
     StoredFile find(long owner, String id);

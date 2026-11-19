@@ -17,6 +17,8 @@ const files = ref<VaultFile[]>([])
 const page = ref(0)
 const pageSize = 20
 const filter = ref('')
+const searchPrefix = ref('')
+const statistics = ref({ files: 0, logicalBytes: 0 })
 const input = ref<HTMLInputElement>()
 const selected = ref<File>()
 const uploading = ref(false)
@@ -36,9 +38,6 @@ const publicFile = ref<PublicFile>()
 const hash = new URLSearchParams(location.hash.slice(1))
 const publicToken = hash.get('share') ?? ''
 const publicPath = '/public/shares/' + encodeURIComponent(publicToken)
-const visibleFiles = computed(() => files.value.filter(file =>
-  file.displayName.toLocaleLowerCase().includes(filter.value.trim().toLocaleLowerCase()),
-))
 const percentage = computed(() => selected.value ? Math.floor(completed.value * 100 / selected.value.size) : 0)
 const shareUrl = computed(() => {
   if (!link.value) return ''
@@ -60,9 +59,21 @@ async function action(operation: () => Promise<void>) {
 }
 
 async function loadPage(index = 0) {
-  const result = await api<VaultFile[]>('/files?page=' + index + '&size=' + pageSize)
+  const query = new URLSearchParams({ page: String(index), size: String(pageSize), prefix: searchPrefix.value })
+  const [result, totals] = await Promise.all([
+    api<VaultFile[]>('/files?' + query),
+    api<typeof statistics.value>('/files/stats'),
+  ])
   page.value = index
   files.value = result
+  statistics.value = totals
+}
+
+async function search() {
+  await action(async () => {
+    searchPrefix.value = filter.value.trim()
+    await loadPage()
+  })
 }
 
 async function authenticate() {
@@ -137,6 +148,8 @@ async function logout() {
     selected.value = undefined
     completed.value = 0
     filter.value = ''
+    searchPrefix.value = ''
+    statistics.value = { files: 0, logicalBytes: 0 }
     closeShare()
   })
 }
@@ -280,7 +293,10 @@ onMounted(async () => {
   </main>
 
   <main v-else class="workspace">
-    <div class="page-heading"><h1>我的文件</h1></div>
+    <div class="page-heading">
+      <h1>我的文件</h1>
+      <span class="muted">{{ statistics.files }} 个文件 · {{ size(statistics.logicalBytes) }}</span>
+    </div>
     <section class="card uploader" aria-labelledby="upload-heading">
       <div class="section-title">
         <span class="upload-mark" aria-hidden="true">↑</span>
@@ -308,14 +324,17 @@ onMounted(async () => {
     <section class="card listing">
       <div class="table-toolbar">
         <h2>文件列表</h2>
-        <input v-model="filter" type="search" placeholder="筛选当前页" aria-label="筛选当前页文件" />
+        <form class="actions" @submit.prevent="search">
+          <input v-model="filter" type="search" maxlength="180" placeholder="文件名前缀" aria-label="文件名前缀" />
+          <button type="submit" :disabled="busy">搜索</button>
+        </form>
       </div>
-      <div v-if="!visibleFiles.length" class="empty">{{ filter ? '没有匹配的文件' : '这一页还没有文件' }}</div>
+      <div v-if="!files.length" class="empty">{{ searchPrefix ? '没有匹配的文件' : '这一页还没有文件' }}</div>
       <div v-else class="table-scroll">
         <table>
           <thead><tr><th>文件名</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="file in visibleFiles" :key="file.id">
+            <tr v-for="file in files" :key="file.id">
               <td><span class="extension">{{ file.displayName.split('.').at(-1) }}</span>{{ file.displayName }}</td>
               <td>{{ size(file.sizeBytes) }}</td><td>{{ date(file.createdAt) }}</td>
               <td class="row-actions">

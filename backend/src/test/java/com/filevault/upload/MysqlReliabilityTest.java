@@ -3,6 +3,7 @@ package com.filevault.upload;
 import com.filevault.FileVaultApplication;
 import com.filevault.common.ApiException;
 import com.filevault.file.FileService;
+import com.filevault.file.FileMapper;
 import com.filevault.storage.LocalStorage;
 import com.filevault.storage.StorageReconciliation;
 import com.filevault.storage.TestJunctions;
@@ -40,6 +41,8 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.caffeine.CaffeineCache;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -72,7 +75,7 @@ class MysqlReliabilityTest {
         return (ServletWebServerApplicationContext) new SpringApplicationBuilder(FileVaultApplication.class).run(
                 "--server.port=0", "--filevault.storage-root=" + root, "--filevault.web-root=" + web.toUri(),
                 "--filevault.cleanup-delay-ms=3600000", "--filevault.user-upload-reservation-bytes=12582912",
-                "--filevault.user-object-quota-bytes=12582912");
+                "--filevault.user-object-quota-bytes=12582912", "--filevault.maintenance.enabled=false");
     }
 
     @AfterAll
@@ -382,6 +385,98 @@ class MysqlReliabilityTest {
         Arrays.fill(different, (byte) 'b');
         assertEquals("QUOTA_EXCEEDED", smallUpload(alice, "other.txt", different, 409).get("code").asText());
         assertEquals(2, alice.get("/api/v1/files", 200).size());
+    }
+
+    @Test
+    void statisticsCacheLoadsOnceAndInvalidatesAfterEachCommittedMutation() throws Exception {
+        Client alice = account();
+        Client bob = account();
+        var cache = (CaffeineCache) app.getBean(CacheManager.class).getCache("fileStatistics");
+        assertNotNull(cache);
+        var nativeCache = cache.getNativeCache();
+        long before = nativeCache.stats().loadSuccessCount();
+        for (int i = 0; i < 3; i++) assertEquals(0, alice.get("/api/v1/files/stats", 200).get("files").asInt());
+        assertEquals(before + 1, nativeCache.stats().loadSuccessCount());
+        byte[] data = bytes("cache example");
+        String file = publish(alice, "cache.txt", data);
+        assertEquals(data.length, alice.get("/api/v1/files/stats", 200).get("logicalBytes").asInt());
+        assertEquals(0, bob.get("/api/v1/files/stats", 200).get("files").asInt());
+        alice.request("PATCH", "/api/v1/files/" + file, JSON.writeValueAsBytes(Map.of("displayName", "renamed.txt")),
+                "application/json", true, 204);
+        assertEquals(1, alice.get("/api/v1/files/stats", 200).get("files").asInt());
+        assertEquals(before + 4, nativeCache.stats().loadSuccessCount());
+        alice.request("DELETE", "/api/v1/files/" + file, null, null, true, 204);
+        assertEquals(0, alice.get("/api/v1/files/stats", 200).get("files").asInt());
+        assertEquals(before + 5, nativeCache.stats().loadSuccessCount());
+    }
+
+    @Test
+    void prefixSearchEscapesWildcardsAndPreservesTenantAndPaginationOrder() throws Exception {
+        Client alice = account();
+        Client bob = account();
+        byte[] data = bytes("prefix");
+        String old = publish(alice, "report_older.txt", data);
+        String recent = publish(alice, "report_recent.txt", data);
+        publish(alice, "report-mismatch.txt", data);
+        publish(bob, "report_other.txt", data);
+        assertEquals(recent, alice.get("/api/v1/files?prefix=report_&size=1", 200).get(0).get("id").asText());
+        assertEquals(old, alice.get("/api/v1/files?prefix=report_&size=1&page=1", 200).get(0).get("id").asText());
+        assertEquals(0, alice.get("/api/v1/files?prefix=report_&size=1&page=2", 200).size());
+    }
+
+    @Test
+    void measuresPrefixSearchPlansWithSyntheticTenantAndVerifiesSameRows() throws Exception {
+        Client alice = account();
+        String file = publish(alice, "base.txt", bytes("query-plan fixture"));
+        jdbc().sql("""
+                INSERT INTO user_files(id, owner_id, object_id, display_name, media_type, created_at)
+                WITH RECURSIVE thousands AS (SELECT 0 AS n UNION ALL SELECT n+1 FROM thousands WHERE n<23),
+                numbers AS (SELECT 0 AS n UNION ALL SELECT n+1 FROM numbers WHERE n<999)
+                SELECT UUID(), f.owner_id, f.object_id,
+                       CONCAT(IF(MOD(thousands.n * 1000 + numbers.n,4000)=0,'needle-','bulk-'),
+                              LPAD(thousands.n * 1000 + numbers.n,5,'0'),'.txt'),
+                       'text/plain', TIMESTAMPADD(SECOND, -(thousands.n * 1000 + numbers.n), UTC_TIMESTAMP(6))
+                FROM user_files f CROSS JOIN thousands CROSS JOIN numbers WHERE f.id=?
+                """).param(file).update();
+        long owner = number("SELECT id FROM users WHERE username=?", alice.name);
+        String optimized = FileMapper.SEARCH.replace("#{owner}", "?").replace("#{pattern}", "?")
+                .replace("#{limit}", "20").replace("#{offset}", "0");
+        String baseline = optimized.replace("FORCE INDEX", "IGNORE INDEX").replace("STRAIGHT_JOIN", "JOIN");
+        var expected = jdbc().sql(baseline).params(owner, "needle-%").query((rs, row) -> rs.getString("id")).list();
+        assertEquals(6, expected.size());
+        assertEquals(expected, jdbc().sql(optimized).params(owner, "needle-%")
+                .query((rs, row) -> rs.getString("id")).list());
+        for (String variant : List.of(baseline, optimized)) {
+            String plan = jdbc().sql("EXPLAIN ANALYZE " + variant).params(owner, "needle-%").query(String.class).single();
+            System.out.println((variant.equals(baseline) ? "FILEVAULT SQL BASELINE" : "FILEVAULT SQL INDEXED") + "\n" + plan);
+        }
+        String upload = declare(alice, "pending-plan.txt", 1, digest(bytes("x")));
+        String token = share(alice, file).get("url").asText().split("/")[5];
+        explain("list", FileMapper.METADATA.replace("#{owner}", "?")
+                + " ORDER BY f.created_at DESC, f.id DESC LIMIT 20", owner);
+        explain("session", "SELECT id,status FROM upload_sessions WHERE owner_id=? AND id=?", owner, upload);
+        explain("dedup", "SELECT id,storage_key FROM file_objects WHERE owner_id=? AND sha256=? AND size_bytes=? "
+                + "AND state='READY' ORDER BY created_at,id LIMIT 1", owner, digest(bytes("query-plan fixture")),
+                bytes("query-plan fixture").length);
+        explain("share", """
+                SELECT f.id FROM share_links s
+                JOIN user_files f ON f.id=s.user_file_id AND f.owner_id=s.owner_id
+                JOIN file_objects o ON o.id=f.object_id AND o.owner_id=f.owner_id
+                WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>UTC_TIMESTAMP(6)
+                AND f.deleted_at IS NULL AND o.state='READY'
+                """, digest(bytes(token)));
+        explain("expiry", "SELECT id FROM upload_sessions WHERE status='OPEN' AND expires_at<=UTC_TIMESTAMP(6)");
+        explain("cleanup", """
+                SELECT c.session_id,c.chunk_index FROM upload_chunks c JOIN upload_sessions s ON c.session_id=s.id
+                WHERE s.status IN ('EXPIRED','ABORTED','COMPLETED','FAILED')
+                AND (c.cleanup_after IS NULL OR c.cleanup_after<=UTC_TIMESTAMP(6))
+                ORDER BY c.session_id,c.chunk_index LIMIT 100
+                """);
+    }
+
+    private static void explain(String name, String sql, Object... parameters) {
+        String plan = jdbc().sql("EXPLAIN FORMAT=TREE " + sql).params(parameters).query(String.class).single();
+        System.out.println("FILEVAULT SQL " + name + "\n" + plan);
     }
 
     @Test

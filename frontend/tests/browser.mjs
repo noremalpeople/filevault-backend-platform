@@ -63,6 +63,7 @@ try {
   page.off('request', track)
   assert.deepEqual(replayed, [1, 2, 3])
   const row = page.getByRole('row').filter({ hasText: fixture.name })
+  await page.getByText('1 个文件 · 13.0 MiB').waitFor()
   const downloadEvent = page.waitForEvent('download')
   await row.getByRole('link', { name: '下载' }).click()
   const download = await downloadEvent
@@ -118,6 +119,11 @@ try {
   await page.getByText('上传校验失败，请重新开始').waitFor()
   await page.getByRole('button', { name: '重新开始上传' }).click()
   await page.getByText('文件已上传。').waitFor()
+  await page.getByRole('row').filter({ hasText: restartFixture.name }).waitFor()
+  await page.getByRole('searchbox', { name: '文件名前缀' }).fill('restart-after')
+  const searchResponse = page.waitForResponse(response => response.ok() && response.url().includes('prefix=restart-after'))
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await searchResponse
   await page.getByRole('row').filter({ hasText: restartFixture.name }).waitFor()
 
   await page.getByRole('button', { name: '退出' }).click()

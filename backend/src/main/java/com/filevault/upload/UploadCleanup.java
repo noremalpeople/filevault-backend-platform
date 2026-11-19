@@ -14,17 +14,21 @@ class UploadCleanup {
     private final UploadMapper uploads;
     private final LocalStorage storage;
     private final int retrySeconds;
+    private final boolean enabled;
 
     UploadCleanup(UploadMapper uploads, LocalStorage storage,
-                  @Value("${filevault.cleanup-retry-seconds}") int retrySeconds) {
+                  @Value("${filevault.cleanup-retry-seconds}") int retrySeconds,
+                  @Value("${filevault.upload-cleanup-enabled}") boolean enabled) {
         if (retrySeconds < 1) throw new IllegalArgumentException("Cleanup retry interval must be positive.");
         this.uploads = uploads;
         this.storage = storage;
         this.retrySeconds = retrySeconds;
+        this.enabled = enabled;
     }
 
     @Scheduled(initialDelayString = "${filevault.cleanup-delay-ms}", fixedDelayString = "${filevault.cleanup-delay-ms}")
     void cleanup() {
+        if (!enabled) return;
         uploads.expire();
         for (var chunk : uploads.closedChunks()) {
             cleanChunk(chunk);

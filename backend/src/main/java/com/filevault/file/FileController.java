@@ -32,8 +32,14 @@ public class FileController {
 
     @GetMapping
     List<FileService.FileView> list(Principal principal, @RequestParam(defaultValue = "0") int page,
-                                   @RequestParam(defaultValue = "20") int size) {
-        return files.list(principal.getName(), page, size);
+                                   @RequestParam(defaultValue = "20") int size,
+                                   @RequestParam(defaultValue = "") String prefix) {
+        return files.list(principal.getName(), page, size, prefix);
+    }
+
+    @GetMapping("/stats")
+    FileMapper.Statistics statistics(Principal principal) {
+        return files.statistics(principal.getName());
     }
 
     @GetMapping("/{id}")

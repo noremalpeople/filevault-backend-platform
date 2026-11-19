@@ -8,6 +8,7 @@
 | F3 通过 | 同用户去重、限时分享与撤销 |
 | F4 通过 | Vue 界面、完整浏览器验收、可复现基准测试 |
 | F5 通过 | 静态目录隔离、破损分片恢复、短事务、只读存储对账和真实 MySQL 回归 |
+| F6 通过 | 跨页前缀搜索、Caffeine 文件统计、持久化只读巡检和有界线程池 |
 
 F0 验收使用 Corretto 21.0.13.1、Maven 3.9.11、Spring Boot 4.1.2、MyBatis Starter 4.1.0、MySQL 8.4.13、Node 24.19.0、npm 11.17.0。Windows 上的 MySQL 便携二进制在含中文的绝对数据路径启动时出现路径解析和权限错误。改用独立的 ASCII 路径 `%TEMP%\FileVault-native-20261119\data` 后成功，现有项目数据库未参与。
 

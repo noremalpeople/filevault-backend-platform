@@ -13,7 +13,8 @@
 | POST | /api/v1/auth/logout | 204，销毁认证会话 |
 | GET | /api/v1/auth/me | 200，当前用户名 |
 | POST | /api/v1/files | 201，multipart 字段 `file`，上限 10 MiB |
-| GET | /api/v1/files | 200，页码从 0 开始，`size` 取 1–100 |
+| GET | /api/v1/files | 200，页码从 0 开始，`size` 取 1–100，`prefix` 为可选文件名前缀 |
+| GET | /api/v1/files/stats | 200，当前用户可见文件数 `files` 和逻辑总字节数 `logicalBytes` |
 | GET | /api/v1/files/{id} | 200，仅当前所有者可读 |
 | GET | /api/v1/files/{id}/download | 200，流式附件 |
 | PATCH | /api/v1/files/{id} | 204，JSON `{"displayName":"renamed.txt"}` |

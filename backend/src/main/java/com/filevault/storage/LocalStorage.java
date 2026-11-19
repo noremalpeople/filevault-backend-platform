@@ -285,7 +285,7 @@ public class LocalStorage {
             Files.deleteIfExists(path);
             return true;
         } catch (IOException failure) {
-            LOG.warn("FileVault could not remove a stored chunk.");
+            LOG.warn("FileVault could not remove a stored chunk: {}", failure.getClass().getSimpleName());
             return false;
         }
     }

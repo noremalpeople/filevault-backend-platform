@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
@@ -30,13 +31,18 @@ public class FileService {
     private final UserMapper users;
     private final FileMapper files;
     private final LocalStorage storage;
+    private final FileStatistics statistics;
+    private final ApplicationEventPublisher events;
 
     public FileService(UserMapper users, FileMapper files, LocalStorage storage, PlatformTransactionManager transactions,
+                       FileStatistics statistics, ApplicationEventPublisher events,
                        @Value("${filevault.user-object-quota-bytes}") long userQuota) {
         if (userQuota < 1) throw new IllegalArgumentException("User object quota must be positive.");
         this.users = users;
         this.files = files;
         this.storage = storage;
+        this.statistics = statistics;
+        this.events = events;
         this.userQuota = userQuota;
         this.write = new TransactionTemplate(transactions);
         this.write.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -76,6 +82,7 @@ public class FileService {
         var candidate = files.reusable(owner, staged.sha256(), staged.bytes());
         if (candidate != null && storage.hasObject(candidate.storageKey())) {
             files.insertFile(file, owner, candidate.id(), name, mediaType);
+            events.publishEvent(new FileStatistics.Changed(owner));
             return FileView.from(require(owner, file));
         }
         if (staged.bytes() > userQuota - files.allocatedBytes(owner)) {
@@ -94,20 +101,31 @@ public class FileService {
         });
         files.insertObject(object, owner, key, staged.sha256(), staged.bytes(), mediaType);
         files.insertFile(file, owner, object, name, mediaType);
+        events.publishEvent(new FileStatistics.Changed(owner));
         return FileView.from(require(owner, file));
     }
 
-    public List<FileView> list(String username, int page, int size) {
+    public List<FileView> list(String username, int page, int size, String prefix) {
         if (page < 0 || size < 1 || size > 100) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAGE", "Use a nonnegative page and size 1 to 100.");
         }
-        return files.list(owner(username), size, (long) page * size).stream().map(FileView::from).toList();
+        long owner = owner(username);
+        long offset = (long) page * size;
+        if (prefix.isEmpty()) return files.list(owner, size, offset).stream().map(FileView::from).toList();
+        if (prefix.length() > 180) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PREFIX", "Use up to 180 characters.");
+        String pattern = prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+        return files.search(owner, pattern, size, offset).stream().map(FileView::from).toList();
+    }
+
+    public FileMapper.Statistics statistics(String username) {
+        return statistics.get(owner(username));
     }
 
     public FileView metadata(String username, UUID id) {
         return FileView.from(require(owner(username), id.toString()));
     }
 
+    @Transactional
     public void rename(String username, UUID id, String name) {
         String type = FileRules.validateName(name);
         long owner = owner(username);
@@ -117,12 +135,16 @@ public class FileService {
         if (files.rename(owner, id.toString(), name) == 0) {
             require(owner, id.toString());
         }
+        events.publishEvent(new FileStatistics.Changed(owner));
     }
 
+    @Transactional
     public void delete(String username, UUID id) {
-        if (files.softDelete(owner(username), id.toString()) == 0) {
+        long owner = owner(username);
+        if (files.softDelete(owner, id.toString()) == 0) {
             throw missing();
         }
+        events.publishEvent(new FileStatistics.Changed(owner));
     }
 
     public FileMapper.StoredFile download(String username, UUID id) {
