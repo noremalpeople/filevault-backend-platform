@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 interface ShareMapper {
-    record SharedFile(String name, String storageKey, long sizeBytes, String mediaType, LocalDateTime expiresAt) { }
+    record SharedFile(String name, String storageKey, long sizeBytes, String mediaType, LocalDateTime expiresAt, String sha256) { }
     record ActiveShare(String id, LocalDateTime expiresAt) { }
 
     @Select("""
@@ -38,7 +38,7 @@ interface ShareMapper {
 
     @Select("""
             SELECT f.display_name AS name, o.storage_key AS storageKey, o.size_bytes AS sizeBytes,
-                   f.media_type AS mediaType, s.expires_at AS expiresAt
+                   f.media_type AS mediaType, s.expires_at AS expiresAt, o.sha256
             FROM share_links s
             JOIN user_files f ON f.id = s.user_file_id AND f.owner_id = s.owner_id
             JOIN file_objects o ON o.id = f.object_id AND o.owner_id = f.owner_id

@@ -3,6 +3,9 @@ package com.filevault.auth;
 import com.filevault.user.UserMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,6 +18,8 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 @Configuration
 @ConditionalOnWebApplication
@@ -36,9 +41,20 @@ public class SecurityConfig {
     }
 
     @Bean
-    SecurityFilterChain security(HttpSecurity http) throws Exception {
+    SecurityFilterChain security(HttpSecurity http,
+            @Value("${filevault.metrics-key}") String metricsKey,
+            @Value("${filevault.rate.login}") int loginLimit,
+            @Value("${filevault.rate.uploads}") int uploads,
+            @Value("${filevault.rate.shares}") int shares) throws Exception {
+        byte[] metricsSecret = metricsKey.getBytes(StandardCharsets.UTF_8);
         return http
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/actuator/metrics", "/actuator/metrics/**")
+                        .access((authentication, context) -> {
+                            String supplied = context.getRequest().getHeader("X-FileVault-Metrics-Key");
+                            return new AuthorizationDecision(metricsSecret.length >= 16 && supplied != null
+                                    && MessageDigest.isEqual(metricsSecret, supplied.getBytes(StandardCharsets.UTF_8)));
+                        })
                         .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/api/v1/health", "/actuator/health",
                                 "/api/v1/auth/csrf", "/api/v1/public/shares/*",
                                 "/api/v1/public/shares/*/download").permitAll()
@@ -47,6 +63,7 @@ public class SecurityConfig {
                                 jakarta.servlet.DispatcherType.ERROR).permitAll()
                         .anyRequest().authenticated())
                 .csrf(Customizer.withDefaults())
+                .addFilterBefore(new RateLimitFilter(loginLimit, uploads, shares), UsernamePasswordAuthenticationFilter.class)
                 .requestCache(cache -> cache.disable())
                 .formLogin(login -> login.loginPage("/api/v1/auth/login").loginProcessingUrl("/api/v1/auth/login")
                         .successHandler((request, response, authentication) -> response.setStatus(204))

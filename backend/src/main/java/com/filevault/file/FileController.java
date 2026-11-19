@@ -7,6 +7,7 @@ import java.security.Principal;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -48,9 +49,9 @@ public class FileController {
     }
 
     @GetMapping("/{id}/download")
-    ResponseEntity<StreamingResponseBody> download(Principal principal, @PathVariable UUID id) {
+    ResponseEntity<StreamingResponseBody> download(Principal principal, @PathVariable UUID id, @RequestHeader HttpHeaders headers) {
         var file = files.download(principal.getName(), id);
-        return downloads.attachment(file.displayName(), file.storageKey(), file.sizeBytes());
+        return downloads.attachment(file.displayName(), file.storageKey(), file.sizeBytes(), file.sha256(), headers);
     }
 
     record Rename(@NotBlank String displayName) { }

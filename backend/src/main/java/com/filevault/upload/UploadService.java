@@ -1,6 +1,7 @@
 package com.filevault.upload;
 
 import com.filevault.common.ApiException;
+import com.filevault.common.TransferTelemetry;
 import com.filevault.storage.FileRules;
 import com.filevault.storage.LocalStorage;
 import com.filevault.user.UserMapper;
@@ -23,11 +24,12 @@ class UploadService {
     private final UploadMapper uploads;
     private final UploadWrites writes;
     private final LocalStorage storage;
+    private final TransferTelemetry telemetry;
     private final long maximum;
     private final int sessionLimit;
     private final long reservationLimit;
 
-    UploadService(UserMapper users, UploadMapper uploads, UploadWrites writes, LocalStorage storage,
+    UploadService(UserMapper users, UploadMapper uploads, UploadWrites writes, LocalStorage storage, TransferTelemetry telemetry,
                   @Value("${filevault.max-upload-bytes}") long maximum,
                   @Value("${filevault.max-open-uploads}") int sessionLimit,
                   @Value("${filevault.user-upload-reservation-bytes}") long reservationLimit) {
@@ -39,6 +41,7 @@ class UploadService {
         this.uploads = uploads;
         this.writes = writes;
         this.storage = storage;
+        this.telemetry = telemetry;
         this.maximum = maximum;
         this.sessionLimit = sessionLimit;
         this.reservationLimit = reservationLimit;
@@ -117,7 +120,7 @@ class UploadService {
             }
         }
         String mediaType = FileRules.validateName(session.filename());
-        try (var merged = storage.mergeChunks(chunks.stream().map(UploadMapper.Chunk::part).toList(), session.totalSize())) {
+        try (var merged = merge(chunks, session.totalSize())) {
             if (merged.bytes() != session.totalSize() || !merged.sha256().equals(session.expectedSha256())) {
                 return fail(owner, session.id(), new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                         "FILE_HASH_MISMATCH", "Merged bytes do not match the declaration. Start over."));
@@ -134,6 +137,18 @@ class UploadService {
             if (failure instanceof ApiException error && !"CHUNK_REPAIR_REQUIRED".equals(error.code())) throw error;
             open(current);
             throw failure;
+        }
+    }
+
+    private LocalStorage.Staged merge(List<UploadMapper.Chunk> chunks, long size) throws IOException {
+        long started = System.nanoTime();
+        boolean success = false;
+        try {
+            var staged = storage.mergeChunks(chunks.stream().map(UploadMapper.Chunk::part).toList(), size);
+            success = true;
+            return staged;
+        } finally {
+            telemetry.recordTransfer("merge", success, started);
         }
     }
 

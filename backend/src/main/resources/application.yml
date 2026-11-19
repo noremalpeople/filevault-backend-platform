@@ -11,6 +11,9 @@ spring:
       connection-init-sql: "SET time_zone = '+00:00'"
   flyway:
     clean-disabled: true
+  mvc:
+    async:
+      request-timeout: 120s
   web:
     resources:
       add-mappings: false
@@ -21,6 +24,7 @@ spring:
       file-size-threshold: 0B
 server:
   address: 127.0.0.1
+  forward-headers-strategy: none
   port: ${FILEVAULT_PORT:8082}
   servlet:
     session:
@@ -29,6 +33,11 @@ server:
         http-only: true
         same-site: strict
 filevault:
+  metrics-key: "${FILEVAULT_METRICS_KEY:}"
+  rate:
+    login: "${FILEVAULT_RATE_LOGIN:20}"
+    uploads: "${FILEVAULT_RATE_UPLOADS:30}"
+    shares: "${FILEVAULT_RATE_SHARES:180}"
   stats-cache-ttl: "${FILEVAULT_STATS_CACHE_TTL:PT30S}"
   stats-cache-capacity: "${FILEVAULT_STATS_CACHE_CAPACITY:1024}"
   maintenance:
@@ -56,7 +65,17 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,metrics
   endpoint:
     health:
       show-details: never
+logging:
+  structured:
+    format:
+      console: "${FILEVAULT_LOG_FORMAT:logstash}"
+      file: logstash
+  logback:
+    rollingpolicy:
+      max-history: 7
+      max-file-size: 10MB
+      total-size-cap: 100MB

@@ -1,5 +1,7 @@
 package com.filevault.storage;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.Set;
 import java.util.UUID;
@@ -25,8 +27,9 @@ class MaintenanceJobs {
     private final Duration grace;
     private final int lease;
     private final int retry;
+    private final MeterRegistry meters;
 
-    MaintenanceJobs(MaintenanceJobMapper jobs, StorageReconciliation scanner,
+    MaintenanceJobs(MaintenanceJobMapper jobs, StorageReconciliation scanner, MeterRegistry meters,
                     @Qualifier("storageMaintenanceExecutor") ThreadPoolTaskExecutor executor,
                     @Value("${filevault.reconcile-grace-seconds}") long grace,
                     @Value("${filevault.maintenance.lease-seconds}") int lease,
@@ -35,9 +38,13 @@ class MaintenanceJobs {
         this.jobs = jobs;
         this.scanner = scanner;
         this.executor = executor;
+        this.meters = meters;
         this.grace = Duration.ofSeconds(grace);
         this.lease = lease;
         this.retry = retry;
+        Gauge.builder("filevault.maintenance.executor.active", executor, ThreadPoolTaskExecutor::getActiveCount).register(meters);
+        Gauge.builder("filevault.maintenance.executor.queued", executor,
+                pool -> pool.getThreadPoolExecutor().getQueue().size()).register(meters);
     }
 
     void enqueue(long period) {
@@ -55,13 +62,15 @@ class MaintenanceJobs {
                 try {
                     run(id);
                 } catch (RuntimeException failure) {
-                    LOG.warn("Storage audit job {} coordination failed with {}", id, failure.getClass().getSimpleName());
+                    LOG.atWarn().addKeyValue("jobId", id).addKeyValue("errorKind", failure.getClass().getSimpleName())
+                            .log("Storage audit coordination failed");
                 } finally {
                     submitted.remove(id);
                 }
             });
         } catch (RejectedExecutionException busy) {
             submitted.remove(id);
+            meters.counter("filevault.maintenance.rejected").increment();
             LOG.debug("Storage audit job {} remains queued in MySQL", id);
         }
     }
@@ -74,7 +83,7 @@ class MaintenanceJobs {
         }
         Integer attempt = jobs.attempts(id, token);
         if (attempt == null) return;
-        LOG.info("Storage audit job {} started attempt {}", id, attempt);
+        LOG.atInfo().addKeyValue("jobId", id).addKeyValue("attempt", attempt).log("Storage audit started");
         long start = System.nanoTime();
         StorageReconciliation.Report report;
         try {
@@ -83,13 +92,18 @@ class MaintenanceJobs {
             String state = attempt >= MAX_ATTEMPTS ? "FAILED" : "PENDING";
             String error = failure.getClass().getSimpleName();
             if (jobs.fail(id, token, state, error, (long) retry * attempt) == 1) {
-                LOG.warn("Storage audit job {} ended as {} with {} after {} ms", id, state, error,
-                        Duration.ofNanos(System.nanoTime() - start).toMillis());
+                meters.counter("filevault.maintenance.attempts", "outcome", "failure").increment();
+                LOG.atWarn().addKeyValue("jobId", id).addKeyValue("state", state).addKeyValue("errorKind", error)
+                        .addKeyValue("durationMs", Duration.ofNanos(System.nanoTime() - start).toMillis())
+                        .log("Storage audit attempt failed");
             }
             return;
         }
         if (jobs.succeed(id, token, report.toString()) == 1) {
-            LOG.info("Storage audit job {} succeeded after {} ms", id, Duration.ofNanos(System.nanoTime() - start).toMillis());
+            meters.counter("filevault.maintenance.attempts", "outcome", "success").increment();
+            LOG.atInfo().addKeyValue("jobId", id)
+                    .addKeyValue("durationMs", Duration.ofNanos(System.nanoTime() - start).toMillis())
+                    .log("Storage audit succeeded");
         }
     }
 }

@@ -56,6 +56,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class MysqlReliabilityTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String PASSWORD = UUID.randomUUID().toString();
+    private static final String METRICS_KEY = UUID.randomUUID().toString();
     @TempDir static Path scratch;
     private static Path storage;
     private static Path web;
@@ -75,7 +76,8 @@ class MysqlReliabilityTest {
         return (ServletWebServerApplicationContext) new SpringApplicationBuilder(FileVaultApplication.class).run(
                 "--server.port=0", "--filevault.storage-root=" + root, "--filevault.web-root=" + web.toUri(),
                 "--filevault.cleanup-delay-ms=3600000", "--filevault.user-upload-reservation-bytes=12582912",
-                "--filevault.user-object-quota-bytes=12582912", "--filevault.maintenance.enabled=false");
+                "--filevault.user-object-quota-bytes=12582912", "--filevault.maintenance.enabled=false",
+                "--filevault.rate.login=200", "--filevault.metrics-key=" + METRICS_KEY);
     }
 
     @AfterAll
@@ -425,6 +427,118 @@ class MysqlReliabilityTest {
     }
 
     @Test
+    void downloadRangesUseValidatorsAndStillEnforceFileAndShareAccess() throws Exception {
+        Client alice = account();
+        Client bob = account();
+        byte[] data = bytes("0123456789");
+        String file = publish(alice, "ranges.txt", data);
+        String path = "/api/v1/files/" + file + "/download";
+        var range = Map.of("Range", "bytes=2-5");
+        var partial = alice.exchange("GET", path, null, null, range);
+        assertEquals(206, partial.statusCode());
+        assertEquals("bytes 2-5/10", partial.headers().firstValue("Content-Range").orElseThrow());
+        assertEquals("4", partial.headers().firstValue("Content-Length").orElseThrow());
+        assertArrayEquals(bytes("2345"), partial.body());
+        String etag = partial.headers().firstValue("ETag").orElseThrow();
+        var suffix = alice.exchange("GET", path, null, null, Map.of("Range", "bytes=-3", "If-Range", etag));
+        assertEquals(206, suffix.statusCode());
+        assertArrayEquals(bytes("789"), suffix.body());
+        var full = alice.exchange("GET", path, null, null, Map.of("Range", "bytes=2-5", "If-Range", "\"stale\""));
+        assertEquals(200, full.statusCode());
+        assertArrayEquals(data, full.body());
+        var invalid = alice.exchange("GET", path, null, null, Map.of("Range", "bytes=100-"));
+        assertEquals(416, invalid.statusCode());
+        assertEquals("bytes */10", invalid.headers().firstValue("Content-Range").orElseThrow());
+        assertEquals(416, alice.exchange("GET", path, null, null, Map.of("Range", "bytes=0-1,3-5")).statusCode());
+        assertEquals(404, bob.exchange("GET", path, null, null, range).statusCode());
+        var link = share(alice, file);
+        var guest = new Client();
+        String sharedPath = link.get("url").asText() + "/download";
+        assertArrayEquals(bytes("2345"), guest.exchange("GET", sharedPath, null, null, range).body());
+        alice.request("DELETE", "/api/v1/shares/" + link.get("id").asText(), null, null, true, 204);
+        assertEquals(404, guest.exchange("GET", sharedPath, null, null, range).statusCode());
+    }
+
+    @Test
+    void requestIdsAndProtectedMetersReflectRealUploadsAndDownloads() throws Exception {
+        Client alice = account();
+        String path = "/actuator/metrics/filevault.upload.requests";
+        assertEquals(403, alice.exchange("GET", path, null, null, Map.of()).statusCode());
+        var headers = Map.of("X-FileVault-Metrics-Key", METRICS_KEY);
+        String file = publish(alice, "metric.txt", bytes("metrics"));
+        var downloaded = alice.exchange("GET", "/api/v1/files/" + file + "/download", null, null, Map.of());
+        var health = alice.exchange("GET", "/actuator/health", null, null, Map.of());
+        UUID first = UUID.fromString(downloaded.headers().firstValue("X-Request-Id").orElseThrow());
+        UUID second = UUID.fromString(health.headers().firstValue("X-Request-Id").orElseThrow());
+        assertNotEquals(first, second);
+        for (String metric : List.of("filevault.upload.requests", "filevault.merge.duration",
+                "filevault.download.duration", "filevault.maintenance.executor.active", "jvm.memory.used", "jvm.threads.live")) {
+            var result = new Client().exchange("GET", "/actuator/metrics/" + metric, null, null, headers);
+            assertEquals(200, result.statusCode(), metric);
+            assertTrue(JSON.readTree(result.body()).get("measurements").size() > 0, metric);
+        }
+    }
+
+    @Test
+    void rateLimitsLoginUploadCreationAndShareReadWithoutTrustingForwardedAddresses() throws Exception {
+        try (var limited = (ServletWebServerApplicationContext) new SpringApplicationBuilder(FileVaultApplication.class)
+                .run("--server.port=0", "--filevault.storage-root=" + storage,
+                        "--filevault.rate.login=2", "--filevault.rate.uploads=2", "--filevault.rate.shares=2",
+                        "--filevault.maintenance.enabled=false",
+                        "--filevault.upload-cleanup-enabled=false")) {
+            var original = app;
+            try {
+                app = limited;
+                Client alice = account();
+                Client guest = new Client();
+                guest.refreshCsrf();
+                for (int i = 0; i < 2; i++) {
+                    var response = guest.exchange("POST", "/api/v1/auth/login", bytes("username=absent&password=bad"),
+                            "application/x-www-form-urlencoded", Map.of(guest.csrfHeader, guest.csrf,
+                                    "X-Forwarded-For", "192.0.2." + (i + 1)));
+                    assertEquals(i == 0 ? 401 : 429, response.statusCode());
+                    if (i == 1) assertTrue(Long.parseLong(response.headers().firstValue("Retry-After").orElseThrow()) > 0);
+                }
+                String hash = digest(bytes("x"));
+                var declaration = Map.of("filename", "limited.txt", "totalSize", 1, "expectedSha256", hash);
+                alice.post("/api/v1/uploads", declaration, 201);
+                alice.post("/api/v1/uploads", declaration, 201);
+                assertEquals("RATE_LIMITED", alice.post("/api/v1/uploads", declaration, 429).get("code").asText());
+                guest.get("/api/v1/public/shares/missing", 404);
+                guest.get("/api/v1/public/shares/missing", 404);
+                assertEquals("RATE_LIMITED", guest.get("/api/v1/public/shares/missing", 429).get("code").asText());
+            } finally {
+                app = original;
+            }
+        }
+    }
+
+    @Test
+    void softDeleteAndShareReadRaceLeavesMetadataDeletedAndUnderlyingObjectIntact() throws Exception {
+        Client alice = account();
+        byte[] data = bytes("concurrent share");
+        String file = publish(alice, "share-race.txt", data);
+        String key = objectKey(file);
+        String url = share(alice, file).get("url").asText() + "/download";
+        var ready = new CountDownLatch(1);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var download = pool.submit(() -> { ready.await(); return new Client().exchange("GET", url, null, null, Map.of()); });
+            var delete = pool.submit(() -> {
+                ready.await();
+                return alice.request("DELETE", "/api/v1/files/" + file, null, null, true, 204);
+            });
+            ready.countDown();
+            var response = download.get(20, TimeUnit.SECONDS);
+            assertTrue(response.statusCode() == 200 || response.statusCode() == 404);
+            if (response.statusCode() == 200) assertArrayEquals(data, response.body());
+            delete.get(20, TimeUnit.SECONDS);
+        }
+        assertEquals(404, new Client().exchange("GET", url, null, null, Map.of()).statusCode());
+        assertEquals(1, number("SELECT COUNT(*) FROM user_files WHERE id=? AND deleted_at IS NOT NULL", file));
+        assertArrayEquals(data, Files.readAllBytes(storage.resolve("objects").resolve(key)));
+    }
+
+    @Test
     void measuresPrefixSearchPlansWithSyntheticTenantAndVerifiesSameRows() throws Exception {
         Client alice = account();
         String file = publish(alice, "base.txt", bytes("query-plan fixture"));
@@ -624,14 +738,19 @@ class MysqlReliabilityTest {
         }
 
         byte[] requestWithToken(String method, String path, byte[] body, String type, String token, int status) throws Exception {
+            var response = exchange(method, path, body, type, token == null ? Map.of() : Map.of(csrfHeader, token));
+            assertEquals(status, response.statusCode(), method + " response status");
+            return response.body();
+        }
+
+        HttpResponse<byte[]> exchange(String method, String path, byte[] body, String type, Map<String, String> headers)
+                throws Exception {
             var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + app.getWebServer().getPort() + path))
                     .timeout(Duration.ofSeconds(25))
                     .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
             if (type != null) request.header("Content-Type", type);
-            if (token != null) request.header(csrfHeader, token);
-            var response = http.send(request.build(), HttpResponse.BodyHandlers.ofByteArray());
-            assertEquals(status, response.statusCode(), method + " response status");
-            return response.body();
+            headers.forEach(request::header);
+            return http.send(request.build(), HttpResponse.BodyHandlers.ofByteArray());
         }
     }
 }

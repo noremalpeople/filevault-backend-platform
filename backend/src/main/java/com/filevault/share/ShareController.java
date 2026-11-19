@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
@@ -55,8 +56,8 @@ class ShareController {
     }
 
     @GetMapping("/api/v1/public/shares/{token}/download")
-    ResponseEntity<StreamingResponseBody> download(@PathVariable String token) {
+    ResponseEntity<StreamingResponseBody> download(@PathVariable String token, @RequestHeader HttpHeaders headers) {
         var file = shares.resolve(token);
-        return downloads.attachment(file.name(), file.storageKey(), file.sizeBytes());
+        return downloads.attachment(file.name(), file.storageKey(), file.sizeBytes(), file.sha256(), headers);
     }
 }
