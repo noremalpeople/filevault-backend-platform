@@ -38,7 +38,7 @@ notepad .env.local
 
 注册并登录，在上传区选择一个大于 8 MiB 的 CSV 文件。等待第一片完成后暂停并刷新，重新选择同一文件继续。下载完成的文件，然后创建一个限时分享，在无痕窗口打开。回到原窗口重新打开分享管理并撤销链接，刷新无痕窗口可观察到链接失效。
 
-![FileVault 文件工作区](docs/screenshots/filevault-workspace.png)
+![FileVault 文件工作区的 F4 验收截图](docs/screenshots/filevault-workspace.png)
 
 在应用运行时另开一个 PowerShell 窗口执行健康检查。已安装 Chrome 时可运行完整浏览器验收。
 
