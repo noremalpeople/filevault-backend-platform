@@ -10,9 +10,22 @@ spring:
       connection-timeout: 4000
   flyway:
     clean-disabled: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
+      file-size-threshold: 0B
 server:
   address: 127.0.0.1
   port: ${FILEVAULT_PORT:8082}
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        http-only: true
+        same-site: strict
+filevault:
+  storage-root: "${FILEVAULT_STORAGE_ROOT:../.local/storage}"
 management:
   endpoints:
     web:

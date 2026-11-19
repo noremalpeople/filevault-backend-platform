@@ -2,6 +2,8 @@
 
 基于 Spring Boot 的大文件分片上传与安全共享管理平台，面向个人和小团队的研发材料管理。当前阶段进度见 [里程碑](docs/milestones.md)。
 
+当前可用功能包括注册、登录和注销、账户隔离、10 MiB 以内的文件上传、分页列表、详情、流式下载、重命名和软删除。API 使用同源会话，调用方式见 [接口文档](docs/api.md)。
+
 ## Windows 原生运行
 
 准备 JDK 21、MySQL 8.4、Git 和 PowerShell。构建使用 Maven Wrapper 3.9.11，前端阶段使用 Node 和 npm。Java 没有加入 PATH 时，可在当前终端设置 `FILEVAULT_JAVA_HOME` 指向现有 JDK 根目录。
