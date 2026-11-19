@@ -32,7 +32,7 @@ class UploadController {
     }
 
     @GetMapping("/{id}")
-    UploadService.Detail get(Principal principal, @PathVariable UUID id) {
+    UploadService.Detail get(Principal principal, @PathVariable UUID id) throws IOException {
         return uploads.get(principal.getName(), id);
     }
 

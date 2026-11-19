@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$Reconcile)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $envFile = Join-Path $root '.env.local'
@@ -34,7 +34,9 @@ try {
         $previous['JAVA_HOME'] = $env:JAVA_HOME
         $env:JAVA_HOME = $env:FILEVAULT_JAVA_HOME
     }
-    & .\mvnw.cmd spring-boot:run
+    $goals = @('spring-boot:run')
+    if ($Reconcile) { $goals = @('-q', 'spring-boot:run', '-Dspring-boot.run.arguments=--reconcile-storage') }
+    & .\mvnw.cmd @goals
     if ($LASTEXITCODE -ne 0) { throw "Maven exited with $LASTEXITCODE." }
 } finally {
     foreach ($key in $previous.Keys) {

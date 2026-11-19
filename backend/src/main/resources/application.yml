@@ -13,7 +13,7 @@ spring:
     clean-disabled: true
   web:
     resources:
-      static-locations: "${FILEVAULT_WEB_ROOT:classpath:/static/}"
+      add-mappings: false
   servlet:
     multipart:
       max-file-size: 10MB
@@ -29,9 +29,17 @@ server:
         http-only: true
         same-site: strict
 filevault:
+  web-root: "${FILEVAULT_WEB_ROOT:classpath:/static/}"
   storage-root: "${FILEVAULT_STORAGE_ROOT:../.local/storage}"
   max-upload-bytes: "${FILEVAULT_MAX_UPLOAD_BYTES:209715200}"
+  user-object-quota-bytes: "${FILEVAULT_USER_OBJECT_QUOTA_BYTES:536870912}"
+  user-upload-reservation-bytes: "${FILEVAULT_USER_UPLOAD_RESERVATION_BYTES:838860800}"
+  max-open-uploads: "${FILEVAULT_MAX_OPEN_UPLOADS:4}"
+  storage-min-free-bytes: "${FILEVAULT_STORAGE_MIN_FREE_BYTES:268435456}"
+  storage-staging-bytes: "${FILEVAULT_STORAGE_STAGING_BYTES:1073741824}"
   cleanup-delay-ms: "${FILEVAULT_CLEANUP_DELAY_MS:60000}"
+  cleanup-retry-seconds: "${FILEVAULT_CLEANUP_RETRY_SECONDS:300}"
+  reconcile-grace-seconds: "${FILEVAULT_RECONCILE_GRACE_SECONDS:900}"
 management:
   endpoints:
     web:

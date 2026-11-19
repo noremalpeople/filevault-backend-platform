@@ -1,0 +1,5 @@
+ALTER TABLE upload_sessions
+    MODIFY status ENUM('OPEN','COMPLETED','ABORTED','EXPIRED','FAILED') NOT NULL DEFAULT 'OPEN';
+
+ALTER TABLE upload_chunks
+    ADD COLUMN cleanup_after DATETIME(6);

@@ -1,5 +1,6 @@
 package com.filevault.upload;
 
+import com.filevault.storage.LocalStorage;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Delete;
@@ -24,7 +25,11 @@ interface UploadMapper {
     record Session(String id, String filename, long totalSize, int chunkSize, int chunkCount, String status,
                    String expectedSha256, LocalDateTime expiresAt, String fileId) { }
 
-    record Chunk(String sessionId, int chunkIndex, int chunkSize, String sha256, String storedKey) { }
+    record Chunk(String sessionId, int chunkIndex, int chunkSize, String sha256, String storedKey) {
+        LocalStorage.Part part() {
+            return new LocalStorage.Part(storedKey, chunkSize, sha256);
+        }
+    }
 
     @Select(SESSION)
     Session find(long owner, String id);
@@ -37,6 +42,14 @@ interface UploadMapper {
             WHERE owner_id = #{owner} AND status = 'OPEN' AND expires_at > UTC_TIMESTAMP(6)
             """)
     int openCount(long owner);
+
+    @Select("""
+            SELECT COALESCE((SELECT SUM(total_size) FROM upload_sessions
+                             WHERE owner_id = #{owner} AND status = 'OPEN' AND expires_at > UTC_TIMESTAMP(6)), 0)
+                 + COALESCE((SELECT SUM(c.chunk_size) FROM upload_chunks c JOIN upload_sessions s ON s.id = c.session_id
+                             WHERE s.owner_id = #{owner} AND (s.status <> 'OPEN' OR s.expires_at <= UTC_TIMESTAMP(6))), 0)
+            """)
+    long reservedBytes(long owner);
 
     @Insert("""
             INSERT INTO upload_sessions(id,owner_id,filename,total_size,chunk_size,chunk_count,expected_sha256,expires_at)
@@ -71,11 +84,18 @@ interface UploadMapper {
 
     @Select("SELECT " + CHUNK_COLUMNS + """
             FROM upload_chunks c JOIN upload_sessions s ON c.session_id = s.id
-            WHERE s.status IN ('EXPIRED','ABORTED','COMPLETED')
+            WHERE s.status IN ('EXPIRED','ABORTED','COMPLETED','FAILED')
+              AND (c.cleanup_after IS NULL OR c.cleanup_after <= UTC_TIMESTAMP(6))
             ORDER BY c.session_id,c.chunk_index LIMIT 100
             """)
     List<Chunk> closedChunks();
 
     @Delete("DELETE FROM upload_chunks WHERE session_id = #{sessionId} AND chunk_index = #{chunkIndex}")
     void forget(String sessionId, int chunkIndex);
+
+    @Update("""
+            UPDATE upload_chunks SET cleanup_after = DATE_ADD(UTC_TIMESTAMP(6), INTERVAL #{seconds} SECOND)
+            WHERE session_id = #{sessionId} AND chunk_index = #{chunkIndex}
+            """)
+    void deferCleanup(String sessionId, int chunkIndex, int seconds);
 }

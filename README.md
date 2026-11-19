@@ -4,7 +4,7 @@
 
 支持会话认证、账户隔离、文件分页管理、流式下载、重命名和软删除。小文件可通过 multipart API 上传，上限为 10 MiB。
 
-浏览器使用 4 MiB 分片上传文件，暂停或刷新后可重新选择同一文件，从服务端已经确认的分片继续。后端流式合并并验证 SHA-256，默认上传上限为 200 MiB。可通过进程环境变量 `FILEVAULT_MAX_UPLOAD_BYTES` 修改上限，取值为 1 至 512 MiB 对应的字节数。
+浏览器使用 4 MiB 分片上传文件，暂停或刷新后可重新选择同一文件继续。服务端核对已登记分片的长度和 SHA-256，缺失或损坏的分片可用原始内容补传。整文件声明验证失败后，浏览器可重新开始。默认上传上限为 200 MiB，`FILEVAULT_MAX_UPLOAD_BYTES` 可设为 1 字节至 512 MiB 对应的字节数。
 
 同一账户的已验证内容可复用物理对象。所有者可创建、查看和撤销有效分享，匿名接收方可下载附件。链接令牌在创建时返回，数据库保存其 SHA-256 摘要。
 
@@ -23,7 +23,7 @@ notepad .env.local
 .\scripts\start-local.ps1
 ```
 
-打开浏览器访问 [本机 FileVault](http://127.0.0.1:8082)。只运行 API 时使用 `.\scripts\start-backend.ps1`。首次构建需要访问 Maven Central 和 npm 的包仓库。
+打开浏览器访问 [本机 FileVault](http://127.0.0.1:8082)。只运行 API 时使用 `.\scripts\start-backend.ps1`。首次构建需要访问 Maven Central 和 npm 的包仓库。静态资源与私有文件应位于分离的目录。配置、资源限制和只读对账命令见 [可靠性文档](docs/reliability.md)。
 
 ## 演示和验证
 
@@ -45,6 +45,10 @@ if ($env:FILEVAULT_JAVA_HOME) { $env:JAVA_HOME = $env:FILEVAULT_JAVA_HOME }
 Pop-Location
 ```
 
+完整后端验收包含真实 MySQL 集成测试。环境变量与命令见 [测试文档](docs/tests.md)。
+
 ## 开发文档
 
 [架构](docs/architecture.md) · [数据库](docs/database.md) · [API](docs/api.md) · [安全](docs/security.md) · [测试](docs/tests.md) · [性能记录](docs/benchmark.md) · [里程碑](docs/milestones.md)
+
+[可靠性与对账](docs/reliability.md) · [F5 安全审查](docs/security-audit.md) · [GitHub 发布清单](docs/github-release-checklist.md)

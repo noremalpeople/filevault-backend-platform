@@ -22,6 +22,7 @@ const selected = ref<File>()
 const uploading = ref(false)
 const completed = ref(0)
 const uploadLabel = ref('')
+const restartAvailable = ref(false)
 let transfer: AbortController | undefined
 const dialog = ref<HTMLDialogElement>()
 const sharing = ref<VaultFile>()
@@ -87,10 +88,11 @@ function choose(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   selected.value = file
   completed.value = 0
+  restartAvailable.value = false
   uploadLabel.value = file ? '等待上传' : ''
 }
 
-async function upload() {
+async function upload(restart = false) {
   const file = selected.value
   if (!file || uploading.value) return
   if (file.size === 0) { failure.value = '请选择非空文件。'; return }
@@ -98,12 +100,13 @@ async function upload() {
   failure.value = ''
   notice.value = ''
   transfer = new AbortController()
+  restartAvailable.value = false
   uploadLabel.value = '正在计算 SHA-256'
   try {
     await sendFile(file, user.value, (bytes, total) => {
       completed.value = bytes
       uploadLabel.value = bytes === total ? '正在校验并合并' : '正在上传'
-    }, transfer.signal)
+    }, transfer.signal, restart)
     uploadLabel.value = '上传完成'
     notice.value = '文件已上传。'
     selected.value = undefined
@@ -111,7 +114,12 @@ async function upload() {
     if (input.value) input.value.value = ''
     await loadPage()
   } catch (error) {
-    uploadLabel.value = transfer.signal.aborted ? '已暂停，可继续上传' : '上传未完成，可重试'
+    const failed = error instanceof ApiError
+      && ['UPLOAD_FAILED', 'FILE_HASH_MISMATCH', 'INVALID_FILE_CONTENT', 'INVALID_CHUNK_LAYOUT',
+        'CHUNK_STORAGE_UNSAFE'].includes(error.code ?? '')
+    restartAvailable.value = true
+    uploadLabel.value = failed ? '上传校验失败，请重新开始'
+      : transfer.signal.aborted ? '已暂停，可继续上传' : '上传未完成，可重试'
     if (!transfer.signal.aborted) failure.value = explain(error)
   } finally {
     uploading.value = false
@@ -288,10 +296,11 @@ onMounted(async () => {
         <progress :value="completed" :max="selected.size || 1" aria-label="上传进度" />
       </div>
       <div class="actions">
-        <button class="primary" type="button" :disabled="!selected || uploading" @click="upload">
+        <button class="primary" type="button" :disabled="!selected || uploading" @click="upload()">
           {{ selected && completed > 0 ? '继续上传' : '开始上传' }}
         </button>
         <button v-if="uploading" type="button" @click="transfer?.abort()">暂停</button>
+        <button v-if="selected && restartAvailable" type="button" @click="upload(true)">重新开始上传</button>
       </div>
     </section>
     <p v-if="failure" class="alert error" role="alert">{{ failure }}</p>

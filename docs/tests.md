@@ -18,3 +18,44 @@ F3 的 `mvnw.cmd clean verify` 共 13 项测试，失败、错误和跳过均为
 - 前端 `npm.cmd test` 执行 4 项测试，覆盖文件指纹、分片边界、缺片清单及续传缓存键。`npm.cmd run build` 执行 TypeScript 检查并生成生产静态资源。
 - 启动真实应用后，在 `frontend` 执行 `npm.cmd run test:browser`。脚本通过本机 Chrome 注册、登录并上传 13 MiB CSV。暂停并刷新页面后，检查仅发送索引 1、2、3，私有下载与公开下载均逐字节比对源文件。刷新所有者页面后撤销分享，匿名接收方随后看到失效提示。最后验证重命名、软删除和退出。
 - 浏览器验收使用随机生成的测试账号和合成文件，会在当前开发库保留测试记录。Chrome 使用非默认安装路径时，在本次终端设置 `FILEVAULT_CHROME`。要另存无令牌的截图，设置 `FILEVAULT_SCREENSHOTS` 为目标目录。
+
+## F5 回归验收
+
+在项目根目录执行以下命令。先按 README 准备运行中的原生 MySQL 和本机配置文件。
+
+```powershell
+$env:FILEVAULT_IT = 'true'
+if ($env:FILEVAULT_JAVA_HOME) { $env:JAVA_HOME = $env:FILEVAULT_JAVA_HOME }
+Get-Content .env.local | ForEach-Object {
+    if ($_ -match '^(FILEVAULT_DB_(?:PORT|USER|PASSWORD))=(.*)$') {
+        [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+    }
+}
+Push-Location backend
+.\mvnw.cmd clean verify
+Pop-Location
+Remove-Item Env:FILEVAULT_IT
+Remove-Item Env:FILEVAULT_DB_PASSWORD
+Push-Location frontend
+npm.cmd ci
+npm.cmd test
+npm.cmd run build
+Pop-Location
+```
+
+在一个终端运行 `.\scripts\start-local.ps1`，另一个终端运行：
+
+```powershell
+.\scripts\smoke-test.ps1
+Push-Location frontend
+npm.cmd run test:browser
+Pop-Location
+```
+
+停止应用后可用 `.\scripts\start-backend.ps1 -Reconcile` 检查现有数据库与存储。集成测试使用端口自动分配的真实 Spring Boot、`filevault_dev` 和独立的临时存储目录，测试结束时清理本次生成的账号数据。不设置 `FILEVAULT_IT=true` 时，默认 Maven 验收仅运行单元测试。
+
+F5 的后端全量验收执行 31 项测试，包含 18 项新增测试，其中 15 项连接真实 MySQL。失败、错误和跳过均为 0。测试覆盖实际静态访问、安全过滤链、Windows Junction、缺盘与同长度损坏恢复、相同及不同分片、并发完成、读取过程中的中止、后端重启、错误 SHA-256、过期及撤销、软删除、只读对账及宽限、清理重试、配额及回滚补偿。集成测试的对象和上传会话预留上限分别配置为 12 MiB，以较小样例验证边界。
+
+前端 6 项测试通过，新增分片补传和失败会话显式重启用例。生产构建、真实 MySQL 健康检查和 Chrome 验收通过。浏览器在保留 F4 流程的基础上，验证服务端拒绝错误整文件摘要后能通过重新开始完成真实上传。
+
+F5 最终验收使用 Windows、Java 21 和现有原生 MySQL 8.4。通过正常启动入口验证 V5 数据库及前端页面。停止验收进程后执行独立只读对账，无引用对象、无引用分片、缺失对象、缺失开放分片、超龄暂存候选五项均为 0。故障注入测试另外验证了非零结果和宽限期。F5 未重新测量吞吐量。

@@ -3,23 +3,27 @@ package com.filevault.storage;
 import com.filevault.common.ApiException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.SequenceInputStream;
+import java.io.OutputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
+import java.security.DigestInputStream;
 import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
@@ -30,22 +34,34 @@ public class LocalStorage {
     private final Path objects;
     private final Path staging;
     private final Path chunks;
+    private final long minFree;
+    private final long stagingLimit;
+    private long stagingReserved;
 
-    public LocalStorage(@Value("${filevault.storage-root}") String directory) throws IOException {
-        root = Path.of(directory).toAbsolutePath().normalize();
-        Path web = Path.of("src/main/resources/static").toAbsolutePath().normalize();
-        if (root.startsWith(web) || web.startsWith(root)) {
-            throw new IOException("Choose a private application storage root.");
-        }
-        Files.createDirectories(root);
-        verifyDirectory(root);
-        objects = ensureDirectory(root.resolve("objects"));
-        staging = ensureDirectory(root.resolve("staging"));
-        chunks = ensureDirectory(root.resolve("chunks"));
+    public LocalStorage(String directory) throws IOException {
+        this(directory, null, 0, Long.MAX_VALUE, false);
     }
 
-    private Path ensureDirectory(Path path) throws IOException {
-        Files.createDirectories(path);
+    @Autowired
+    public LocalStorage(@Value("${filevault.storage-root}") String directory, WebRoot web,
+                        @Value("${filevault.storage-min-free-bytes}") long minFree,
+                        @Value("${filevault.storage-staging-bytes}") long stagingLimit,
+                        @Value("${filevault.reconcile-only:false}") boolean readOnly) throws IOException {
+        root = Path.of(directory).toAbsolutePath().normalize();
+        if (web != null) web.verifyPrivate(root);
+        if (!readOnly) Files.createDirectories(root);
+        verifyDirectory(root);
+        if (web != null) web.verifyPrivate(root);
+        if (minFree < 0 || stagingLimit < 1) throw new IllegalArgumentException("Invalid storage resource limits.");
+        this.minFree = minFree;
+        this.stagingLimit = stagingLimit;
+        objects = storageDirectory(root.resolve("objects"), readOnly);
+        staging = storageDirectory(root.resolve("staging"), readOnly);
+        chunks = storageDirectory(root.resolve("chunks"), readOnly);
+    }
+
+    private Path storageDirectory(Path path, boolean readOnly) throws IOException {
+        if (!readOnly) Files.createDirectories(path);
         verifyDirectory(path);
         return path;
     }
@@ -57,40 +73,96 @@ public class LocalStorage {
         }
     }
 
-    public record Staged(Path path, long bytes, String sha256) implements AutoCloseable {
+    public final class Staged implements AutoCloseable {
+        private final Path path;
+        private final long bytes;
+        private final String sha256;
+        private final long reserved;
+        private boolean closed;
+
+        private Staged(Path path, long bytes, String sha256, long reserved) {
+            this.path = path;
+            this.bytes = bytes;
+            this.sha256 = sha256;
+            this.reserved = reserved;
+        }
+
+        public Path path() { return path; }
+        public long bytes() { return bytes; }
+        public String sha256() { return sha256; }
+
         @Override
         public void close() {
-            remove(path);
+            if (!closed) {
+                closed = true;
+                try {
+                    remove(path);
+                } finally {
+                    release(reserved);
+                }
+            }
         }
     }
 
     public Staged stage(InputStream input, long maxBytes) throws IOException {
+        return stage(maxBytes, output -> copy(input, output, maxBytes));
+    }
+
+    @FunctionalInterface
+    private interface StageWriter {
+        long write(OutputStream output) throws IOException;
+    }
+
+    private Staged stage(long maxBytes, StageWriter writer) throws IOException {
         verifyDirectory(staging);
-        Path temporary = Files.createTempFile(staging, "incoming-", ".part");
+        reserve(maxBytes);
+        Path temporary = null;
         MessageDigest hash = sha256();
         boolean success = false;
         try {
-            long size = 0;
+            temporary = Files.createTempFile(staging, "incoming-", ".part");
+            long size;
             try (var output = new DigestOutputStream(Files.newOutputStream(temporary), hash)) {
-                byte[] buffer = new byte[64 * 1024];
-                for (int count; (count = input.read(buffer)) != -1;) {
-                    size += count;
-                    if (size > maxBytes) {
-                        throw new ApiException(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE", "The upload exceeds the limit.");
-                    }
-                    output.write(buffer, 0, count);
-                }
+                size = writer.write(output);
             }
             if (size == 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "EMPTY_FILE", "Empty uploads are unsupported.");
             }
             success = true;
-            return new Staged(temporary, size, HexFormat.of().formatHex(hash.digest()));
+            return new Staged(temporary, size, HexFormat.of().formatHex(hash.digest()), maxBytes);
         } finally {
             if (!success) {
-                remove(temporary);
+                if (temporary != null) remove(temporary);
+                release(maxBytes);
             }
         }
+    }
+
+    private synchronized void reserve(long bytes) throws IOException {
+        long free = Files.getFileStore(staging).getUsableSpace();
+        if (bytes > stagingLimit - stagingReserved || free < minFree || bytes > free - minFree
+                || stagingReserved > free - minFree - bytes) {
+            throw new ApiException(HttpStatus.INSUFFICIENT_STORAGE, "STORAGE_BUSY",
+                    "Temporary storage is full or the disk is below its free-space threshold.");
+        }
+        stagingReserved += bytes;
+    }
+
+    private synchronized void release(long bytes) {
+        stagingReserved -= bytes;
+    }
+
+    private static long copy(InputStream input, OutputStream output, long limit) throws IOException {
+        long size = 0;
+        byte[] buffer = new byte[64 * 1024];
+        for (int count; (count = input.read(buffer)) != -1;) {
+            size += count;
+            if (size > limit) {
+                throw new ApiException(HttpStatus.CONTENT_TOO_LARGE, "FILE_TOO_LARGE", "The upload exceeds the limit.");
+            }
+            output.write(buffer, 0, count);
+        }
+        return size;
     }
 
     public void publish(Staged staged, String key) throws IOException {
@@ -101,8 +173,10 @@ public class LocalStorage {
         move(staged, keyedPath(chunks, key));
     }
 
-    public boolean hasChunk(String key) throws IOException {
-        return hasFile(keyedPath(chunks, key));
+    public void repairChunk(Staged staged, String key) throws IOException {
+        Path path = keyedPath(chunks, key);
+        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) verifyFile(path);
+        move(staged, path, StandardCopyOption.REPLACE_EXISTING);
     }
 
     public boolean hasObject(String key) throws IOException {
@@ -117,35 +191,64 @@ public class LocalStorage {
         return true;
     }
 
-    public Staged mergeChunks(List<String> keys, long size) throws IOException {
-        List<InputStream> streams = new ArrayList<>();
+    public enum ChunkState { OK, MISSING, CORRUPT }
+
+    public record Part(String key, long bytes, String sha256) { }
+
+    public ChunkState inspectChunk(Part part) throws IOException {
+        return readPart(part, OutputStream.nullOutputStream());
+    }
+
+    private ChunkState readPart(Part part, OutputStream output) throws IOException {
+        Path path = keyedPath(chunks, part.key());
+        MessageDigest digest = sha256();
         try {
-            for (String key : keys) {
-                streams.add(openFile(keyedPath(chunks, key)));
+            BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!attrs.isRegularFile() || !path.toRealPath().equals(path)) {
+                throw new ApiException(HttpStatus.CONFLICT, "CHUNK_STORAGE_UNSAFE",
+                        "The stored chunk cannot be repaired in this session. Start over.");
             }
-            try (var all = new SequenceInputStream(Collections.enumeration(streams))) {
-                return stage(all, size);
+            if (attrs.size() != part.bytes()) return ChunkState.CORRUPT;
+            try (var input = new DigestInputStream(openFile(path), digest)) {
+                long bytes = copy(input, output, part.bytes());
+                return bytes == part.bytes() && HexFormat.of().formatHex(digest.digest()).equals(part.sha256())
+                        ? ChunkState.OK : ChunkState.CORRUPT;
+            } catch (ApiException grewWhileReading) {
+                return ChunkState.CORRUPT;
             }
-        } finally {
-            for (InputStream stream : streams) {
-                try {
-                    stream.close();
-                } catch (IOException failure) {
-                    LOG.warn("FileVault could not close a chunk stream.");
-                }
-            }
+        } catch (NoSuchFileException missing) {
+            return ChunkState.MISSING;
         }
     }
 
-    private void move(Staged staged, Path destination) throws IOException {
+    public Staged mergeChunks(List<Part> parts, long size) throws IOException {
+        return stage(size, output -> {
+            long bytes = 0;
+            for (Part part : parts) {
+                if (part.bytes() > size - bytes || readPart(part, output) != ChunkState.OK) {
+                    throw new ApiException(HttpStatus.CONFLICT, "CHUNK_REPAIR_REQUIRED",
+                            "A stored chunk is missing or corrupt. Check the upload and resend it.");
+                }
+                bytes += part.bytes();
+            }
+            return bytes;
+        });
+    }
+
+    private void move(Staged staged, Path destination, StandardCopyOption... fallback) throws IOException {
         verifyDirectory(staging);
         if (!staged.path().getParent().equals(staging) || !staged.path().toRealPath().equals(staged.path())) {
             throw new IOException("Unexpected staging file.");
         }
+        Files.setLastModifiedTime(staged.path(), FileTime.from(Instant.now()));
+        if (fallback.length == 0) {
+            Files.move(staged.path(), destination);
+            return;
+        }
         try {
             Files.move(staged.path(), destination, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException failure) {
-            Files.move(staged.path(), destination);
+            Files.move(staged.path(), destination, fallback);
         }
     }
 
@@ -159,7 +262,8 @@ public class LocalStorage {
     }
 
     private void verifyFile(Path path) throws IOException {
-        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || !path.toRealPath().equals(path)) {
+        if (!Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS).isRegularFile()
+                || !path.toRealPath().equals(path)) {
             throw new IOException("Stored file is unavailable.");
         }
     }
@@ -192,6 +296,17 @@ public class LocalStorage {
             throw new IOException("Unexpected storage key.");
         }
         return directory.resolve(key);
+    }
+
+    Path auditDirectory(String kind) throws IOException {
+        Path path = switch (kind) {
+            case "objects" -> objects;
+            case "chunks" -> chunks;
+            case "staging" -> staging;
+            default -> throw new IllegalArgumentException("Unexpected storage category.");
+        };
+        verifyDirectory(path);
+        return path;
     }
 
     private static void remove(Path path) {

@@ -6,29 +6,40 @@ import com.filevault.storage.LocalStorage;
 import com.filevault.user.UserMapper;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class FileService {
     public static final long SMALL_FILE_BYTES = 10L * 1024 * 1024;
-    private static final long USER_QUOTA = 512L * 1024 * 1024;
+    private final long userQuota;
+    private final TransactionTemplate write;
     private final UserMapper users;
     private final FileMapper files;
     private final LocalStorage storage;
 
-    public FileService(UserMapper users, FileMapper files, LocalStorage storage) {
+    public FileService(UserMapper users, FileMapper files, LocalStorage storage, PlatformTransactionManager transactions,
+                       @Value("${filevault.user-object-quota-bytes}") long userQuota) {
+        if (userQuota < 1) throw new IllegalArgumentException("User object quota must be positive.");
         this.users = users;
         this.files = files;
         this.storage = storage;
+        this.userQuota = userQuota;
+        this.write = new TransactionTemplate(transactions);
+        this.write.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
     public record FileView(String id, String displayName, String sha256, long sizeBytes, String mediaType,
@@ -39,14 +50,22 @@ public class FileService {
         }
     }
 
-    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = IOException.class)
     public FileView upload(String username, String name, InputStream content) throws IOException {
         try (content) {
             String mediaType = FileRules.validateName(name);
             try (var staged = storage.stage(content, SMALL_FILE_BYTES)) {
                 FileRules.validateContent(staged.path(), mediaType);
-                return persist(owner(username), name, mediaType, staged);
+                long owner = owner(username);
+                return write.execute(status -> {
+                    try {
+                        return persist(owner, name, mediaType, staged);
+                    } catch (IOException failure) {
+                        throw new UncheckedIOException(failure);
+                    }
+                });
             }
+        } catch (UncheckedIOException failure) {
+            throw failure.getCause();
         }
     }
 
@@ -59,7 +78,7 @@ public class FileService {
             files.insertFile(file, owner, candidate.id(), name, mediaType);
             return FileView.from(require(owner, file));
         }
-        if (staged.bytes() > USER_QUOTA - files.allocatedBytes(owner)) {
+        if (staged.bytes() > userQuota - files.allocatedBytes(owner)) {
             throw new ApiException(HttpStatus.CONFLICT, "QUOTA_EXCEEDED", "The account storage quota is exhausted.");
         }
         String key = UUID.randomUUID().toString();

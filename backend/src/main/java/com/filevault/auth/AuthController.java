@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.Map;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -15,6 +16,7 @@ import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
+@ConditionalOnWebApplication
 @RequestMapping("/api/v1/auth")
 public class AuthController {
     private final UserMapper users;

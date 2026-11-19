@@ -12,8 +12,9 @@ export interface UploadSession {
   chunkSize: number
   chunkCount: number
   totalSize: number
-  status: 'OPEN' | 'COMPLETED' | 'ABORTED' | 'EXPIRED'
+  status: 'OPEN' | 'COMPLETED' | 'ABORTED' | 'EXPIRED' | 'FAILED'
   received: number[]
+  repair: { index: number; reason: 'MISSING' | 'CORRUPT' }[]
   fileId: string | null
 }
 
@@ -24,7 +25,7 @@ export interface Share {
 }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) { super(message) }
+  constructor(readonly status: number, message: string, readonly code?: string) { super(message) }
 }
 
 let csrf: { headerName: string; token: string } | undefined
@@ -40,8 +41,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
   const response = await fetch('/api/v1' + path, { ...options, headers, credentials: 'same-origin' })
   if (!response.ok) {
-    const error = await response.json().catch(() => undefined) as { message?: string } | undefined
-    throw new ApiError(response.status, error?.message ?? '请求失败，请重试。')
+    const error = await response.json().catch(() => undefined) as { message?: string; code?: string } | undefined
+    throw new ApiError(response.status, error?.message ?? '请求失败，请重试。', error?.code)
   }
   return response.status === 204 ? undefined as T : await response.json() as T
 }

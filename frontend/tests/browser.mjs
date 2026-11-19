@@ -105,10 +105,25 @@ try {
   await page.getByRole('button', { name: '确认删除' }).click()
   await page.getByText('文件已删除。').waitFor()
   assert.equal(await renamed.count(), 0)
+
+  const restartFixture = {
+    name: 'restart-after-checksum.txt', mimeType: 'text/plain', buffer: Buffer.from('FileVault restart fixture'),
+  }
+  await page.route('**/api/v1/uploads', async route => {
+    const declared = route.request().postDataJSON()
+    await route.continue({ postData: JSON.stringify({ ...declared, expectedSha256: '0'.repeat(64) }) })
+  }, { times: 1 })
+  await page.locator('input[type=file]').setInputFiles(restartFixture)
+  await page.getByRole('button', { name: '开始上传' }).click()
+  await page.getByText('上传校验失败，请重新开始').waitFor()
+  await page.getByRole('button', { name: '重新开始上传' }).click()
+  await page.getByText('文件已上传。').waitFor()
+  await page.getByRole('row').filter({ hasText: restartFixture.name }).waitFor()
+
   await page.getByRole('button', { name: '退出' }).click()
   await page.getByRole('heading', { name: '登录文件库' }).waitFor()
   assert.deepEqual(errors, [])
-  console.log('PASS Chromium UI registration, login, logout, resume after reload, private and public download, sharing, revocation after reload, rename and delete')
+  console.log('PASS Chromium UI authentication, resume after reload, verified downloads, sharing, revoke, rename, delete and restart after checksum failure')
 } catch (error) {
   console.error('Browser acceptance failed', error.name, String(error.message).replace(/share=[A-Za-z0-9_-]{43}/g, 'share=[redacted]'))
   process.exitCode = 1

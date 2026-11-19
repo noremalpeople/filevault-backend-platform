@@ -34,13 +34,21 @@ export async function fingerprint(file: Blob, signal?: AbortSignal): Promise<str
 
 export async function sendFile(
   file: File, username: string, onProgress: (completed: number, total: number) => void, signal: AbortSignal,
+  restart = false,
 ): Promise<string> {
   const expectedSha256 = await fingerprint(file, signal)
   signal.throwIfAborted()
   const key = resumeKey(username, file, expectedSha256)
   const existing = localStorage.getItem(key)
   let session: UploadSession | undefined
-  if (existing) {
+  if (existing && restart) {
+    try {
+      await api('/uploads/' + existing + '/abort', { method: 'POST', signal })
+    } catch (error) {
+      if (!(error instanceof ApiError && (error.status === 404
+        || ['UPLOAD_CLOSED', 'UPLOAD_FAILED'].includes(error.code ?? '')))) throw error
+    }
+  } else if (existing) {
     try {
       const found = await api<UploadSession>('/uploads/' + existing, { signal })
       if (found.status === 'COMPLETED' && found.fileId) {
@@ -48,7 +56,12 @@ export async function sendFile(
         onProgress(file.size, file.size)
         return found.fileId
       }
-      if (found.status === 'OPEN' && found.totalSize === file.size) session = found
+      if (found.status === 'FAILED') {
+        throw new ApiError(409, '上传已无法继续，请重新开始。', 'UPLOAD_FAILED')
+      }
+      if (found.status === 'OPEN' && found.totalSize === file.size) {
+        session = found
+      }
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 404)) throw error
     }
