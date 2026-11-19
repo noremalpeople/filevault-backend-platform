@@ -37,7 +37,7 @@ public class SecurityConfig {
     SecurityFilterChain security(HttpSecurity http) throws Exception {
         return http
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.GET, "/api/v1/health", "/actuator/health",
+                        .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**", "/api/v1/health", "/actuator/health",
                                 "/api/v1/auth/csrf", "/api/v1/public/shares/*",
                                 "/api/v1/public/shares/*/download").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/register", "/api/v1/auth/login").permitAll()

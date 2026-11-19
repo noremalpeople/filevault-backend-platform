@@ -5,6 +5,7 @@ import com.filevault.file.FileService;
 import com.filevault.user.UserMapper;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -22,6 +23,11 @@ class ShareService {
     }
 
     record Created(String id, LocalDateTime expiresAt, String url) { }
+
+    List<ShareMapper.ActiveShare> listActive(String username, UUID fileId) {
+        files.metadata(username, fileId);
+        return shares.listActive(owner(username), fileId.toString());
+    }
 
     Created create(String username, UUID fileId, int minutes) {
         files.download(username, fileId);

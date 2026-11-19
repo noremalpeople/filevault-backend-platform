@@ -1,6 +1,7 @@
 package com.filevault.share;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;
@@ -9,6 +10,16 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 interface ShareMapper {
     record SharedFile(String name, String storageKey, long sizeBytes, String mediaType, LocalDateTime expiresAt) { }
+    record ActiveShare(String id, LocalDateTime expiresAt) { }
+
+    @Select("""
+            SELECT id, expires_at AS expiresAt
+            FROM share_links
+            WHERE owner_id = #{owner} AND user_file_id = #{file}
+                  AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP(6)
+            ORDER BY created_at DESC, id DESC
+            """)
+    List<ActiveShare> listActive(long owner, String file);
 
     @Insert("""
             INSERT INTO share_links(id, owner_id, user_file_id, token_hash, expires_at, created_at)

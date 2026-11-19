@@ -8,8 +8,12 @@ spring:
     hikari:
       maximum-pool-size: 8
       connection-timeout: 4000
+      connection-init-sql: "SET time_zone = '+00:00'"
   flyway:
     clean-disabled: true
+  web:
+    resources:
+      static-locations: "${FILEVAULT_WEB_ROOT:classpath:/static/}"
   servlet:
     multipart:
       max-file-size: 10MB

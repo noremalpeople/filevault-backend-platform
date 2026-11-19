@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import java.security.Principal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,12 @@ class ShareController {
     record Request(@NotNull UUID fileId, @Min(1) @Max(10080) int expiresInMinutes) { }
 
     record Summary(String displayName, long sizeBytes, String mediaType, LocalDateTime expiresAt) { }
+
+    @GetMapping("/api/v1/files/{id}/shares")
+    ResponseEntity<List<ShareMapper.ActiveShare>> list(Principal principal, @PathVariable UUID id) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(shares.listActive(principal.getName(), id));
+    }
 
     @PostMapping("/api/v1/shares")
     ResponseEntity<ShareService.Created> create(Principal principal, @Valid @RequestBody Request request) {

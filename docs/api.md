@@ -34,6 +34,7 @@
 | 方法 | URL | 响应 |
 |---|---|---|
 | POST | /api/v1/shares | 201，发送 `fileId`、`expiresInMinutes`，返回分享 ID、到期时间及一次性令牌链接 |
+| GET | /api/v1/files/{id}/shares | 200，文件所有者可查询有效分享的 ID 和到期时间 |
 | DELETE | /api/v1/shares/{id} | 204，撤销本账户链接，可重复撤销 |
 | GET | /api/v1/public/shares/{token} | 200，公开摘要，无需会话 |
 | GET | /api/v1/public/shares/{token}/download | 200，流式附件，无需会话 |
