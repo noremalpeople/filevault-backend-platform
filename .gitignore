@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.local/
+data/
+logs/
+target/
+dist/
+node_modules/
+.idea/
+.vscode/
+*.log
+*.pem
+*.key
+*.iml
+*.tmp

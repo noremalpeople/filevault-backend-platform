@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: filevault
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:${FILEVAULT_DB_PORT:3308}/filevault_dev?connectionTimeZone=UTC&connectTimeout=3000&socketTimeout=5000"
+    username: ${FILEVAULT_DB_USER:filevault_app}
+    password: "${FILEVAULT_DB_PASSWORD}"
+    hikari:
+      maximum-pool-size: 8
+      connection-timeout: 4000
+  flyway:
+    clean-disabled: true
+server:
+  address: 127.0.0.1
+  port: ${FILEVAULT_PORT:8082}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
