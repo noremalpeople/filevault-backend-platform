@@ -53,12 +53,17 @@ public class FileService {
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = IOException.class)
     public FileView persist(long owner, String name, String mediaType, LocalStorage.Staged staged) throws IOException {
         users.lock(owner);
+        String file = UUID.randomUUID().toString();
+        var candidate = files.reusable(owner, staged.sha256(), staged.bytes());
+        if (candidate != null && storage.hasObject(candidate.storageKey())) {
+            files.insertFile(file, owner, candidate.id(), name, mediaType);
+            return FileView.from(require(owner, file));
+        }
         if (staged.bytes() > USER_QUOTA - files.allocatedBytes(owner)) {
             throw new ApiException(HttpStatus.CONFLICT, "QUOTA_EXCEEDED", "The account storage quota is exhausted.");
         }
         String key = UUID.randomUUID().toString();
         String object = UUID.randomUUID().toString();
-        String file = UUID.randomUUID().toString();
         storage.publish(staged, key);
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
@@ -69,7 +74,7 @@ public class FileService {
             }
         });
         files.insertObject(object, owner, key, staged.sha256(), staged.bytes(), mediaType);
-        files.insertFile(file, owner, object, name);
+        files.insertFile(file, owner, object, name, mediaType);
         return FileView.from(require(owner, file));
     }
 

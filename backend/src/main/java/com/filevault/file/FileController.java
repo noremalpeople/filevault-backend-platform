@@ -1,15 +1,11 @@
 package com.filevault.file;
 
-import com.filevault.storage.LocalStorage;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.security.Principal;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -21,11 +17,11 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @RequestMapping("/api/v1/files")
 public class FileController {
     private final FileService files;
-    private final LocalStorage storage;
+    private final FileDownloads downloads;
 
-    public FileController(FileService files, LocalStorage storage) {
+    public FileController(FileService files, FileDownloads downloads) {
         this.files = files;
-        this.storage = storage;
+        this.downloads = downloads;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -48,18 +44,7 @@ public class FileController {
     @GetMapping("/{id}/download")
     ResponseEntity<StreamingResponseBody> download(Principal principal, @PathVariable UUID id) {
         var file = files.download(principal.getName(), id);
-        StreamingResponseBody body = output -> {
-            try (var input = storage.open(file.storageKey())) {
-                input.transferTo(output);
-            }
-        };
-        return ResponseEntity.ok()
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .contentLength(file.sizeBytes())
-                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
-                        .filename(file.displayName(), StandardCharsets.UTF_8).build().toString())
-                .header("X-Content-Type-Options", "nosniff")
-                .body(body);
+        return downloads.attachment(file.displayName(), file.storageKey(), file.sizeBytes());
     }
 
     record Rename(@NotBlank String displayName) { }

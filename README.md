@@ -6,6 +6,8 @@
 
 大文件可使用 4 MiB 分片、断点续传和 SHA-256 校验，默认上限 200 MiB。需要调整时，在启动前设置进程环境变量 `FILEVAULT_MAX_UPLOAD_BYTES`，允许值为 1 至 512 MiB 对应的字节数。
 
+同一账户的已验证内容可复用物理对象。文件可创建限时分享，创建者可以撤销，接收方无需登录即可使用尚有效的链接。
+
 ## Windows 原生运行
 
 准备 JDK 21、MySQL 8.4、Git 和 PowerShell。构建使用 Maven Wrapper 3.9.11，前端阶段使用 Node 和 npm。Java 没有加入 PATH 时，可在当前终端设置 `FILEVAULT_JAVA_HOME` 指向现有 JDK 根目录。

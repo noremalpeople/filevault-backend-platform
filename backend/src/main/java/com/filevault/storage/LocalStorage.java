@@ -102,7 +102,14 @@ public class LocalStorage {
     }
 
     public boolean hasChunk(String key) throws IOException {
-        Path path = keyedPath(chunks, key);
+        return hasFile(keyedPath(chunks, key));
+    }
+
+    public boolean hasObject(String key) throws IOException {
+        return hasFile(keyedPath(objects, key));
+    }
+
+    private boolean hasFile(Path path) throws IOException {
         if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
             return false;
         }

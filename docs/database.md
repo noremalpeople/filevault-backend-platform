@@ -14,3 +14,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
 `V2__files.sql` 增加 `file_objects` 和 `user_files`。复合外键确保文件及其物理对象属于同一用户。列表按所有者、软删除状态、创建时间和 ID 排序。
 
 `V3__uploads.sql` 增加 `upload_sessions` 和 `upload_chunks`。分片复合主键限制会话内的索引唯一性。请求通过所有者与 ID 锁定会话行，完整文件登记和会话完成在同一事务内写入。
+
+`V4__sharing.sql` 为文件记录补齐逻辑 MIME 类型并新增 `share_links`。复合外键关联分享与同一所有者的文件，唯一索引定位令牌摘要。对象按所有者、已验证 SHA-256 和体积查重，文件逻辑记录可保留各自的文件名和 MIME 类型。
