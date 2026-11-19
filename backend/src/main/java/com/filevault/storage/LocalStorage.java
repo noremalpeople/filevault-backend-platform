@@ -3,6 +3,7 @@ package com.filevault.storage;
 import com.filevault.common.ApiException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.SequenceInputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -11,7 +12,10 @@ import java.nio.file.StandardCopyOption;
 import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +29,7 @@ public class LocalStorage {
     private final Path root;
     private final Path objects;
     private final Path staging;
+    private final Path chunks;
 
     public LocalStorage(@Value("${filevault.storage-root}") String directory) throws IOException {
         root = Path.of(directory).toAbsolutePath().normalize();
@@ -36,6 +41,7 @@ public class LocalStorage {
         verifyDirectory(root);
         objects = ensureDirectory(root.resolve("objects"));
         staging = ensureDirectory(root.resolve("staging"));
+        chunks = ensureDirectory(root.resolve("chunks"));
     }
 
     private Path ensureDirectory(Path path) throws IOException {
@@ -88,11 +94,47 @@ public class LocalStorage {
     }
 
     public void publish(Staged staged, String key) throws IOException {
+        move(staged, keyedPath(objects, key));
+    }
+
+    public void publishChunk(Staged staged, String key) throws IOException {
+        move(staged, keyedPath(chunks, key));
+    }
+
+    public boolean hasChunk(String key) throws IOException {
+        Path path = keyedPath(chunks, key);
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        verifyFile(path);
+        return true;
+    }
+
+    public Staged mergeChunks(List<String> keys, long size) throws IOException {
+        List<InputStream> streams = new ArrayList<>();
+        try {
+            for (String key : keys) {
+                streams.add(openFile(keyedPath(chunks, key)));
+            }
+            try (var all = new SequenceInputStream(Collections.enumeration(streams))) {
+                return stage(all, size);
+            }
+        } finally {
+            for (InputStream stream : streams) {
+                try {
+                    stream.close();
+                } catch (IOException failure) {
+                    LOG.warn("FileVault could not close a chunk stream.");
+                }
+            }
+        }
+    }
+
+    private void move(Staged staged, Path destination) throws IOException {
         verifyDirectory(staging);
         if (!staged.path().getParent().equals(staging) || !staged.path().toRealPath().equals(staged.path())) {
             throw new IOException("Unexpected staging file.");
         }
-        Path destination = objectPath(key);
         try {
             Files.move(staged.path(), destination, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException failure) {
@@ -101,27 +143,48 @@ public class LocalStorage {
     }
 
     public InputStream open(String key) throws IOException {
-        Path path = objectPath(key);
+        return openFile(keyedPath(objects, key));
+    }
+
+    private InputStream openFile(Path path) throws IOException {
+        verifyFile(path);
+        return Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS);
+    }
+
+    private void verifyFile(Path path) throws IOException {
         if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || !path.toRealPath().equals(path)) {
             throw new IOException("Stored file is unavailable.");
         }
-        return Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS);
     }
 
     public void removeObject(String key) {
         try {
-            remove(objectPath(key));
+            remove(keyedPath(objects, key));
         } catch (IOException failure) {
             LOG.warn("Storage rollback could not access the private object directory.");
         }
     }
 
-    private Path objectPath(String key) throws IOException {
-        verifyDirectory(objects);
+    public boolean removeChunk(String key) {
+        try {
+            Path path = keyedPath(chunks, key);
+            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                verifyFile(path);
+            }
+            Files.deleteIfExists(path);
+            return true;
+        } catch (IOException failure) {
+            LOG.warn("FileVault could not remove a stored chunk.");
+            return false;
+        }
+    }
+
+    private Path keyedPath(Path directory, String key) throws IOException {
+        verifyDirectory(directory);
         if (!UUID.fromString(key).toString().equals(key)) {
             throw new IOException("Unexpected storage key.");
         }
-        return objects.resolve(key);
+        return directory.resolve(key);
     }
 
     private static void remove(Path path) {

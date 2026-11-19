@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -37,7 +39,7 @@ public class FileService {
         }
     }
 
-    @Transactional(rollbackFor = IOException.class)
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = IOException.class)
     public FileView upload(String username, String name, InputStream content) throws IOException {
         try (content) {
             String mediaType = FileRules.validateName(name);
@@ -48,7 +50,8 @@ public class FileService {
         }
     }
 
-    private FileView persist(long owner, String name, String mediaType, LocalStorage.Staged staged) throws IOException {
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = IOException.class)
+    public FileView persist(long owner, String name, String mediaType, LocalStorage.Staged staged) throws IOException {
         users.lock(owner);
         if (staged.bytes() > USER_QUOTA - files.allocatedBytes(owner)) {
             throw new ApiException(HttpStatus.CONFLICT, "QUOTA_EXCEEDED", "The account storage quota is exhausted.");

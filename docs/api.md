@@ -20,3 +20,13 @@
 | DELETE | /api/v1/files/{id} | 204，软删除 |
 
 同源客户端保存服务端会话 Cookie。注册、登录、上传、改名、删除和退出都携带 GET csrf 获得的请求头。登录完成后重新取得 CSRF token。错误体包括 `code` 和 `message`。未登录访问文件列表返回 401，缺少 CSRF 返回 403，非所有者访问文件返回 404。
+
+| 方法 | URL | 响应 |
+|---|---|---|
+| POST | /api/v1/uploads | 201，JSON 包含 `filename`、`totalSize`、小写 64 字符 `expectedSha256` |
+| GET | /api/v1/uploads/{id} | 200，状态、已上传索引 `received`、到期时间和可空的完成文件 ID |
+| PUT | /api/v1/uploads/{id}/chunks/{index} | 204，二进制请求体，同内容重传幂等 |
+| POST | /api/v1/uploads/{id}/complete | 200，返回同一 `fileId` |
+| POST | /api/v1/uploads/{id}/abort | 204，已取消时重试仍成功 |
+
+分片索引从 0 开始，片大小固定 4 MiB，末片可更短。有效期为 24 小时。分片冲突、缺片或会话已关闭返回 409，长度不足或合并哈希不匹配返回 422，超过片或小文件上传上限返回 413。后台清理完成后，已结束会话的 `received` 可为空。

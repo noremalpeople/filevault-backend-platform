@@ -26,6 +26,8 @@ server:
         same-site: strict
 filevault:
   storage-root: "${FILEVAULT_STORAGE_ROOT:../.local/storage}"
+  max-upload-bytes: "${FILEVAULT_MAX_UPLOAD_BYTES:209715200}"
+  cleanup-delay-ms: "${FILEVAULT_CLEANUP_DELAY_MS:60000}"
 management:
   endpoints:
     web:

@@ -12,3 +12,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
 开发账号的 DDL 权限用于 Flyway 迁移，作用域仅为 `filevault_dev.*`。启动时执行 `V1__users.sql` 与后续增量迁移，Flyway 的 clean 功能关闭。用 `SELECT DATABASE(), CURRENT_USER();` 和 `SHOW GRANTS FOR CURRENT_USER;` 检查实际连接及权限。
 
 `V2__files.sql` 增加 `file_objects` 和 `user_files`。复合外键确保文件及其物理对象属于同一用户。列表按所有者、软删除状态、创建时间和 ID 排序。
+
+`V3__uploads.sql` 增加 `upload_sessions` 和 `upload_chunks`。分片复合主键限制会话内的索引唯一性。请求通过所有者与 ID 锁定会话行，完整文件登记和会话完成在同一事务内写入。

@@ -4,6 +4,8 @@
 
 当前可用功能包括注册、登录和注销、账户隔离、10 MiB 以内的文件上传、分页列表、详情、流式下载、重命名和软删除。API 使用同源会话，调用方式见 [接口文档](docs/api.md)。
 
+大文件可使用 4 MiB 分片、断点续传和 SHA-256 校验，默认上限 200 MiB。需要调整时，在启动前设置进程环境变量 `FILEVAULT_MAX_UPLOAD_BYTES`，允许值为 1 至 512 MiB 对应的字节数。
+
 ## Windows 原生运行
 
 准备 JDK 21、MySQL 8.4、Git 和 PowerShell。构建使用 Maven Wrapper 3.9.11，前端阶段使用 Node 和 npm。Java 没有加入 PATH 时，可在当前终端设置 `FILEVAULT_JAVA_HOME` 指向现有 JDK 根目录。
