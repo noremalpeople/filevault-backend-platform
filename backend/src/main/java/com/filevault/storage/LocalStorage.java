@@ -18,7 +18,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +38,7 @@ public class LocalStorage {
     private final Path chunks;
     private final long minFree;
     private final long stagingLimit;
+    private final Set<Path> inUseStaging = ConcurrentHashMap.newKeySet();
     private long stagingReserved;
 
     public LocalStorage(String directory) throws IOException {
@@ -98,6 +101,7 @@ public class LocalStorage {
                 try {
                     remove(path);
                 } finally {
+                    inUseStaging.remove(path);
                     release(reserved);
                 }
             }
@@ -121,6 +125,7 @@ public class LocalStorage {
         boolean success = false;
         try {
             temporary = Files.createTempFile(staging, "incoming-", ".part");
+            inUseStaging.add(temporary);
             long size;
             try (var output = new DigestOutputStream(Files.newOutputStream(temporary), hash)) {
                 size = writer.write(output);
@@ -132,7 +137,10 @@ public class LocalStorage {
             return new Staged(temporary, size, HexFormat.of().formatHex(hash.digest()), maxBytes);
         } finally {
             if (!success) {
-                if (temporary != null) remove(temporary);
+                if (temporary != null) {
+                    remove(temporary);
+                    inUseStaging.remove(temporary);
+                }
                 release(maxBytes);
             }
         }
@@ -307,6 +315,10 @@ public class LocalStorage {
         };
         verifyDirectory(path);
         return path;
+    }
+
+    boolean isStagedInUse(Path path) {
+        return inUseStaging.contains(path);
     }
 
     private static void remove(Path path) {

@@ -58,7 +58,9 @@ public class StorageReconciliation {
                 if (ref.expected() && !regular(chunks.resolve(ref.key()))) missingChunks++;
             }
         }
-        long staged = agedFiles(storage.auditDirectory("staging"), cutoff, "incoming-.*\\.part").size();
+        Path staging = storage.auditDirectory("staging");
+        long staged = agedFiles(staging, cutoff, "incoming-.*\\.part").stream()
+                .map(staging::resolve).filter(path -> !storage.isStagedInUse(path)).count();
         return new Report(orphanObjects.size(), orphanChunks.size(), missingObjects, missingChunks, staged);
     }
 

@@ -18,3 +18,5 @@ GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES
 `V4__sharing.sql` 为文件记录补齐逻辑 MIME 类型并新增 `share_links`。复合外键关联分享与同一所有者的文件，唯一索引定位令牌摘要。对象按所有者、已验证 SHA-256 和体积查重，文件逻辑记录可保留各自的文件名和 MIME 类型。
 
 `V5__upload_recovery.sql` 为不可继续的验证失败增加 `FAILED` 状态，为分片清理增加下次尝试时间。默认端口为 3308，便携 MySQL 数据目录建议使用本机可写的纯 ASCII 路径。若应用无法连接，先运行 `.\scripts\check-env.ps1` 确认端口，再核对 MySQL 回环绑定与应用账号权限。
+
+`V6__file_search_and_maintenance.sql` 增加文件名前缀索引和巡检任务表。巡检表持久化去重窗口、状态、可领取时间、租约、重试次数及脱敏结果。[查询计划](mysql-optimization.md) · [巡检约定](reliability.md)

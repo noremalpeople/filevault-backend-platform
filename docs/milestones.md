@@ -10,6 +10,7 @@
 | F5 通过 | 静态目录隔离、破损分片恢复、短事务、只读存储对账和真实 MySQL 回归 |
 | F6 通过 | 跨页前缀搜索、Caffeine 文件统计、持久化只读巡检和有界线程池 |
 | F7 通过 | 结构化日志、请求追踪、受保护指标、入口限流、单区间下载与传输实测 |
+| F8 本地通过 | README、GitHub Actions、技能证据、简历描述、面试指南。托管 CI 待发布后运行 |
 
 F0 验收使用 Corretto 21.0.13.1、Maven 3.9.11、Spring Boot 4.1.2、MyBatis Starter 4.1.0、MySQL 8.4.13、Node 24.19.0、npm 11.17.0。Windows 上的 MySQL 便携二进制在含中文的绝对数据路径启动时出现路径解析和权限错误。改用独立的 ASCII 路径 `%TEMP%\FileVault-native-20261119\data` 后成功，现有项目数据库未参与。
 

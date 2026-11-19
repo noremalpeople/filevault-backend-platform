@@ -32,6 +32,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -45,6 +46,7 @@ import org.springframework.cache.CacheManager;
 import org.springframework.cache.caffeine.CaffeineCache;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.dao.DataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
@@ -316,7 +318,11 @@ class MysqlReliabilityTest {
         Path oldChunk = synthetic(storage.resolve("chunks"), UUID.randomUUID().toString(), true);
         Path agedStage = synthetic(storage.resolve("staging"), "incoming-test.part", true);
 
-        var report = scanner.scan(grace);
+        StorageReconciliation.Report report;
+        try (var inUse = app.getBean(LocalStorage.class).stage(new ByteArrayInputStream(data), data.length)) {
+            Files.setLastModifiedTime(inUse.path(), FileTime.from(Instant.now().minus(Duration.ofHours(1))));
+            report = scanner.scan(grace);
+        }
         assertEquals(baseline.orphanObjects() + 1, report.orphanObjects());
         assertEquals(baseline.orphanChunks() + 1, report.orphanChunks());
         assertEquals(baseline.missingObjects() + 1, report.missingObjects());
@@ -594,26 +600,29 @@ class MysqlReliabilityTest {
     }
 
     @Test
-    void databaseRollbackCompensatesPublishedPhysicalObject() throws Exception {
+    void databaseWriteFailureCompensatesPublishedPhysicalObject() throws Exception {
         Client alice = account();
         long owner = number("SELECT id FROM users WHERE username=?", alice.name);
         byte[] data = bytes("transaction compensation fixture");
         var files = app.getBean(FileService.class);
         var transactions = new TransactionTemplate(app.getBean(PlatformTransactionManager.class));
-        Path published;
+        var publication = new AtomicReference<Path>();
         try (var staged = app.getBean(LocalStorage.class).stage(new ByteArrayInputStream(data), data.length)) {
-            published = transactions.execute(tx -> {
+            var rejected = assertThrows(DataAccessException.class, () -> transactions.executeWithoutResult(tx -> {
                 try {
                     var file = files.persist(owner, "rollback.txt", "text/plain", staged);
-                    Path path = storage.resolve("objects").resolve(objectKey(file.id()));
+                    String key = objectKey(file.id());
+                    Path path = storage.resolve("objects").resolve(key);
                     assertTrue(Files.exists(path));
-                    tx.setRollbackOnly();
-                    return path;
+                    publication.set(path);
+                    update("UPDATE file_objects SET size_bytes=0 WHERE storage_key=?", key);
                 } catch (java.io.IOException failure) {
                     throw new UncheckedIOException(failure);
                 }
-            });
+            }));
+            assertEquals(3819, assertInstanceOf(java.sql.SQLException.class, rejected.getMostSpecificCause()).getErrorCode());
         }
+        Path published = publication.get();
         assertNotNull(published);
         assertFalse(Files.exists(published));
         assertEquals(0, alice.get("/api/v1/files", 200).size());
