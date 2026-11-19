@@ -50,9 +50,10 @@ public class LocalStorage {
                         @Value("${filevault.storage-min-free-bytes}") long minFree,
                         @Value("${filevault.storage-staging-bytes}") long stagingLimit,
                         @Value("${filevault.reconcile-only:false}") boolean readOnly) throws IOException {
-        root = Path.of(directory).toAbsolutePath().normalize();
-        if (web != null) web.verifyPrivate(root);
-        if (!readOnly) Files.createDirectories(root);
+        Path configuredRoot = Path.of(directory).toAbsolutePath().normalize();
+        if (web != null) web.verifyPrivate(configuredRoot);
+        if (!readOnly) Files.createDirectories(configuredRoot);
+        root = configuredRoot.toRealPath();
         verifyDirectory(root);
         if (web != null) web.verifyPrivate(root);
         if (minFree < 0 || stagingLimit < 1) throw new IllegalArgumentException("Invalid storage resource limits.");
@@ -71,7 +72,7 @@ public class LocalStorage {
 
     private void verifyDirectory(Path path) throws IOException {
         if (!path.startsWith(root) || !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
-                || !path.toRealPath().equals(path)) {
+                || !path.toRealPath().startsWith(root.toRealPath())) {
             throw new IOException("Unexpected storage directory.");
         }
     }
